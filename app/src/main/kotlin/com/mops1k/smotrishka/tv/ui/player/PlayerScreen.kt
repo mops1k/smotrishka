@@ -1,5 +1,7 @@
 package com.mops1k.smotrishka.tv.ui.player
 
+import android.graphics.Matrix
+import android.view.TextureView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -101,6 +103,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -108,6 +111,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.util.EventLogger
 import androidx.media3.ui.PlayerView
 import com.mops1k.smotrishka.tv.SessionLog
 import com.mops1k.smotrishka.tv.core.data.AspectMode
@@ -272,6 +276,8 @@ private fun PlayerContent(
     val buffer = remember(bufferSeconds) { PlayerBuffer(bufferSeconds) }
 
     var unavailable by remember(channel.streamUrl) { mutableStateOf(false) }
+    // Размер кадра нужен масштабу TextureView: у SurfaceView это делал PlayerView сам.
+    var videoSize by remember(channel.streamUrl) { mutableStateOf(VideoSize.UNKNOWN) }
 
     // Эфир пишется в растущий файл, а файл отдаётся плееру как непрерывный локальный поток:
     // так нет ни «стены» длительности, ни перепривязки к окну провайдера.
@@ -306,9 +312,11 @@ private fun PlayerContent(
     var firstFrame by remember(channel.streamUrl) { mutableStateOf(false) }
     var playerCreatedAt by remember(channel.streamUrl) { mutableStateOf(0L) }
     var server by remember(channel.streamUrl) { mutableStateOf<LocalHlsServer?>(null) }
+    // Прокси не смог отдать ни одного сегмента — возвращаемся к прямому потоку.
+    var bufferFailed by remember(channel.streamUrl) { mutableStateOf(false) }
     var autoBuffer by remember(channel.streamUrl) { mutableStateOf(bufferPreferred) }
     var playerRef by remember(channel.streamUrl) { mutableStateOf<ExoPlayer?>(null) }
-    val useBuffer = !direct || autoBuffer
+    val useBuffer = (!direct || autoBuffer) && !bufferFailed
     // Связь пропала: показываем плашку поверх видео, но экран не блокируем —
     // поток догонит сам, как только сеть вернётся.
     var streamProblem by remember(channel.streamUrl) { mutableStateOf(false) }
@@ -380,7 +388,7 @@ private fun PlayerContent(
         server = hls
         streamUrl = hls.start()
         android.util.Log.d("SmotrishkaBuffer", "hls server url=$streamUrl")
-        val loader = LiveBufferLoader(PlayerHttp.client, context.cacheDir)
+        val loader = LiveBufferLoader(client = PlayerHttp.client, cacheDir = context.cacheDir)
         // Второй рубеж: даже неожиданная ошибка загрузчика не должна ронять экран
         // (непойманное исключение в корутине LaunchedEffect закрывает приложение).
         runCatching {
@@ -395,6 +403,11 @@ private fun PlayerContent(
                 onGap = onMarkUnstable,
                 isActive = { true },
                 onConnectivity = { available -> streamProblem = !available },
+                onHopeless = {
+                    // Прокси не отдал ни одного сегмента: переключаем канал на прямой поток.
+                    bufferFailed = true
+                    autoBuffer = false
+                },
             )
         }.onFailure {
             android.util.Log.e("SmotrishkaBuffer", "buffer loader stopped", it)
@@ -609,6 +622,10 @@ private fun PlayerContent(
                 }
             }
 
+            override fun onVideoSizeChanged(size: VideoSize) {
+                videoSize = size
+            }
+
             override fun onRenderedFirstFrame() {
                 firstFrame = true
                 android.util.Log.d(
@@ -673,14 +690,14 @@ private fun PlayerContent(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-            ) {
-                // Касание пустого места переключает OSD: показано — скрываем, скрыто — показываем.
-                // Пока открыт список каналов, касание OSD не трогает — иначе он закроет список.
-                if (!channelsVisible) {
-                    if (controls.state.value.osdVisible) controls.hideOsd() else controls.onInteraction()
+            // Касание пустого места переключает OSD. Именно касание, а не clickable:
+            // clickable на ТВ ловит и нажатие OK с пульта (фокус на этом же Box), из-за чего
+            // OSD показывался обработчиком клавиши и тут же прятался кликом.
+            .pointerInput(controlsState.osdVisible, channelsVisible) {
+                detectTapGestures {
+                    if (!channelsVisible) {
+                        if (controlsState.osdVisible) controls.hideOsd() else controls.onInteraction()
+                    }
                 }
             }
             // Свайп по видео: вверх — следующий канал, вниз — предыдущий. Для пульта остаются
@@ -759,8 +776,8 @@ private fun PlayerContent(
                         }
                     }
                 } else if (event.key == Key.DirectionUp || event.key == Key.DirectionDown) {
-                    if (channelsVisible) {
-                        // Пока открыт список, крестовина ходит по строкам, а не переключает канал.
+                    if (channelsVisible || controlsState.osdVisible) {
+                        // Список каналов или OSD: крестовина принадлежит им, канал не переключаем.
                         false
                     } else {
                         if (event.type == KeyEventType.KeyDown) {
@@ -780,16 +797,17 @@ private fun PlayerContent(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
-                PlayerView(viewContext).apply {
-                    useController = false
-                    this.player = player
-                }
+                // TextureView вместо PlayerView/SurfaceView: на ТВ-приставке t950s_be311
+                // поверхность SurfaceView приходила нулевого размера (Media3 писал
+                // surfaceSize 0x0 → videoDisabled), и кадра не было вовсе. TextureView живёт
+                // внутри иерархии вью и рисуется под Compose-оверлеями.
+                VideoSurfaceView(viewContext).also { it.bind(player) }
             },
             update = { view ->
-                // При смене экземпляра плеера (перемотка архива) поверхность перепривязываем:
-                // иначе остаётся чёрная картинка при работающем звуке.
-                if (view.player !== player) view.player = player
-                view.resizeMode = AspectModes.resizeMode(aspectMode)
+                // При смене экземпляра плеера поверхность перепривязываем: иначе остаётся
+                // чёрная картинка при работающем звуке.
+                view.bind(player)
+                view.applyAspect(aspectMode, videoSize)
             },
         )
 
@@ -945,7 +963,9 @@ private fun PlayerContent(
         }
 
         AnimatedVisibility(
-            visible = controlsState.osdVisible && !unavailable,
+            // OSD не прячем даже при ошибке потока: иначе на экране «Поток недоступен»
+            // кнопка OK не даёт ничего, и из плеера нельзя ни выйти, ни переключиться.
+            visible = controlsState.osdVisible,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.fillMaxSize(),
@@ -1468,6 +1488,11 @@ private fun buildPlayer(
         .setTrackSelector(trackSelector)
         .build()
         .apply {
+            // Диагностика Media3: выбранные дорожки, инициализация кодеков, первый кадр, ошибки.
+            // Нужна на слабых приставках, где «Загрузка…» висит без явной ошибки.
+            addAnalyticsListener(EventLogger())
+        }
+        .apply {
             // Живой отступ нужен только сетевому потоку; для локального сегмента он включает
             // «живой» режим и плеер бесконечно буферизуется.
             // Архив — не эфир: live-конфигурация заставляла плеер прыгать к «краю» окна.
@@ -1623,3 +1648,40 @@ private const val MEGABYTE = 1024L * 1024
 /** Текущее время без секунд для правого верхнего угла OSD. */
 private fun currentClockText(): String =
     java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+
+/**
+ * Поверхность видео на `TextureView`.
+ *
+ * `PlayerView` выводит кадр через `SurfaceView`, который композитится отдельным слоем под окном.
+ * На ТВ-приставке `t950s_be311` его поверхность приходила нулевого размера, Media3 писал
+ * `surfaceSize 0x0`, отключал видео (`videoDisabled`) и кадра не было вообще. `TextureView`
+ * рисуется внутри иерархии вью, поэтому не зависит от слоёв окна и виден под Compose-оверлеями.
+ *
+ * Масштаб кадра считается [AspectTransform] — по тем же режимам, что были у `PlayerView`.
+ */
+private class VideoSurfaceView(context: android.content.Context) : TextureView(context) {
+
+    private var boundPlayer: ExoPlayer? = null
+
+    /** Привязывает поверхность к плееру, отвязывая прежний экземпляр. */
+    fun bind(target: ExoPlayer) {
+        if (boundPlayer === target) return
+        boundPlayer?.clearVideoTextureView(this)
+        boundPlayer = target
+        target.setVideoTextureView(this)
+    }
+
+    /** Применяет режим кадра (вписать, растянуть, обрезать, 1:1). */
+    fun applyAspect(mode: AspectMode, size: VideoSize) {
+        val (scaleX, scaleY) = AspectTransform.scale(
+            mode = mode,
+            videoWidth = size.width,
+            videoHeight = size.height,
+            viewWidth = width,
+            viewHeight = height,
+        )
+        val matrix = Matrix()
+        matrix.setScale(scaleX, scaleY, width / 2f, height / 2f)
+        setTransform(matrix)
+    }
+}

@@ -45,8 +45,11 @@ class LiveBufferLoader(
         onGap: () -> Unit = {},
         isActive: () -> Boolean = { true },
         onConnectivity: (Boolean) -> Unit = {},
+        onHopeless: () -> Unit = {},
     ) = withContext(Dispatchers.IO) {
         val written = mutableSetOf<Long>()
+        var successes = 0
+        var givenUp = 0
         var lastTimestamp = 0L
         var lastPts = 0L
         var brokenBefore = false
@@ -101,8 +104,17 @@ class LiveBufferLoader(
                         onGap()
                         written.remove(timestamp)
                         brokenBefore = true
+                        givenUp++
+                        // Ни одного сегмента за несколько попыток: прокси на этом канале бесполезен.
+                        // Экран обязан вернуться к прямому потоку, иначе «Загрузка» висит вечно.
+                        if (successes == 0 && givenUp >= HOPELESS_SEGMENTS) {
+                            Log.w(TAG, "прокси не получил ни одного сегмента — отдаём канал напрямую")
+                            onHopeless()
+                            return@withContext
+                        }
                         continue
                     }
+                    successes++
 
                     // Скачок меток времени: вместо маркера разрыва выравниваем PTS, чтобы
                     // плеер не перезапускал декодер и картинка не вставала на паузу.
@@ -206,6 +218,9 @@ class LiveBufferLoader(
 
         /** Сколько ждём готовый сегмент, прежде чем пометить разрыв и идти дальше. */
         const val WAIT_LIMIT_MS = 20_000L
+
+        /** Сколько сегментов подряд отдаём без ответа, прежде чем отказаться от прокси. */
+        const val HOPELESS_SEGMENTS = 2
 
         /** Сколько неудачных опросов плейлиста подряд считаем обрывом связи. */
         const val OFFLINE_AFTER_FAILURES = 2
