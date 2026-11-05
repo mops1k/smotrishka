@@ -9,6 +9,7 @@ import com.mops1k.smotrishka.tv.core.data.VideoQuality
  * Плеер сам выбирает вариант по скорости сети, но потолок задаёт пользователь: на слабом
  * интернете 480p смотрится без постоянной буферизации, тогда как 1080p только тянет трафик.
  */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 object PlayerQuality {
 
     /**

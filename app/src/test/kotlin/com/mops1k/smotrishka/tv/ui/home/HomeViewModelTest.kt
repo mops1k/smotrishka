@@ -6,7 +6,10 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.google.common.truth.Truth.assertThat
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
 import com.mops1k.smotrishka.tv.core.data.EpgStore
+import com.mops1k.smotrishka.tv.core.data.SearchRepository
+import com.mops1k.smotrishka.tv.core.data.FavoritesStore
 import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
+import com.mops1k.smotrishka.tv.core.data.RecentChannelsStore
 import com.mops1k.smotrishka.tv.core.data.SmotrishkaDatabase
 import com.mops1k.smotrishka.tv.core.data.SyncStatusStore
 import com.mops1k.smotrishka.tv.core.model.Category
@@ -42,7 +45,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 
 /**
- * TDD-спецификация главного экрана: категории, каналы и «сейчас / далее» из EPG.
+ * TDD-спецификация главного экрана: разделы, категории, поиск, карточка и телепрограмма.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -54,8 +57,8 @@ class HomeViewModelTest {
     private lateinit var database: SmotrishkaDatabase
     private lateinit var catalogStore: CatalogStore
     private lateinit var epgStore: EpgStore
-    private lateinit var favoritesStore: com.mops1k.smotrishka.tv.core.data.FavoritesStore
-    private lateinit var recentChannels: com.mops1k.smotrishka.tv.core.data.RecentChannelsStore
+    private lateinit var favoritesStore: FavoritesStore
+    private lateinit var recentChannels: RecentChannelsStore
     private lateinit var settingsStore: PlayerSettingsStore
     private lateinit var syncStatusStore: SyncStatusStore
     private lateinit var settingsScope: CoroutineScope
@@ -75,8 +78,8 @@ class HomeViewModelTest {
         val dataStore = PreferenceDataStoreFactory.create(scope = settingsScope) {
             File(tempFolder.root, "home.preferences_pb")
         }
-        favoritesStore = com.mops1k.smotrishka.tv.core.data.FavoritesStore(dataStore)
-        recentChannels = com.mops1k.smotrishka.tv.core.data.RecentChannelsStore(dataStore)
+        favoritesStore = FavoritesStore(dataStore)
+        recentChannels = RecentChannelsStore(dataStore)
         settingsStore = PlayerSettingsStore(dataStore)
         syncStatusStore = SyncStatusStore(dataStore)
     }
@@ -86,6 +89,14 @@ class HomeViewModelTest {
         Dispatchers.resetMain()
         settingsScope.cancel()
         database.close()
+    }
+
+    private val searchRepository by lazy {
+        SearchRepository(
+            catalogDao = database.catalogDao(),
+            epgDao = database.epgDao(),
+            searchDao = database.searchDao(),
+        )
     }
 
     private fun viewModel() = HomeViewModel(
@@ -98,6 +109,7 @@ class HomeViewModelTest {
         syncStatusStore = syncStatusStore,
         clock = Clock.fixed(now, ZoneOffset.UTC),
         epgUpdater = epgUpdater(),
+        searchRepository = searchRepository,
     )
 
     /** Настоящий EpgUpdater на тестовых хранилищах: состояние читается, сеть не нужна. */
@@ -125,7 +137,10 @@ class HomeViewModelTest {
     private suspend fun playlist() {
         catalogStore.replaceCatalog(
             Playlist(
-                categories = listOf(Category(id = "основные", name = "Основные"), Category(id = "кино", name = "Кино")),
+                categories = listOf(
+                    Category(id = "основные", name = "Основные"),
+                    Category(id = "кино", name = "Кино"),
+                ),
                 channels = listOf(
                     Channel(
                         id = ChannelId("one"),
@@ -169,15 +184,15 @@ class HomeViewModelTest {
     }
 
     @Test
-    fun `рейл категорий начинается с пункта Все`() = runTest {
+    fun `плашка категорий начинается с пункта Все каналы`() = runTest {
         playlist()
 
         val content = viewModel().state.first { it is HomeUiState.Content } as HomeUiState.Content
 
-        // Избранное всегда первым пунктом: это дополнительная категория в самом верху.
-        assertThat(content.categories.first().name).isEqualTo("Избранное")
+        // Избранное и Недавние — разделы сайдбара, а не категории канала.
         assertThat(content.categories.map { it.name })
-            .containsExactly("Избранное", "Все", "Основные", "Кино")
+            .containsExactly("Все каналы", "Основные", "Кино")
+            .inOrder()
         assertThat(content.channels).hasSize(2)
     }
 
@@ -230,21 +245,24 @@ class HomeViewModelTest {
 
         model.selectCategory("кино")
 
-        val content = model.state.first { it is HomeUiState.Content && it.selectedCategoryId == "кино" } as HomeUiState.Content
+        val content = model.state.first {
+            it is HomeUiState.Content && it.selectedCategoryId == "кино"
+        } as HomeUiState.Content
         assertThat(content.channels.map { it.channel.name }).containsExactly("Киноканал")
     }
 
     @Test
-    fun `до выбора канала превью пустое`() = runTest {
+    fun `до выбора канала карточка пуста`() = runTest {
         playlist()
 
         val content = viewModel().state.first { it is HomeUiState.Content } as HomeUiState.Content
 
         assertThat(content.selectedChannelId).isNull()
+        assertThat(content.previewChannel).isNull()
     }
 
     @Test
-    fun `выбор канала показывает его в превью`() = runTest {
+    fun `выбор канала показывает его в карточке`() = runTest {
         playlist()
         val model = viewModel()
         model.state.first { it is HomeUiState.Content }
@@ -254,33 +272,7 @@ class HomeViewModelTest {
 
         val content = model.state.first { it is HomeUiState.Content } as HomeUiState.Content
         assertThat(content.selectedChannelId).isEqualTo(ChannelId("two"))
-    }
-
-    @Test
-    fun `выбор категории открывает список каналов`() = runTest {
-        playlist()
-        val model = viewModel()
-        model.state.first { it is HomeUiState.Content }
-
-        model.selectCategory("кино")
-
-        val content = model.state.first { it is HomeUiState.Content && it.selectedCategoryId == "кино" } as HomeUiState.Content
-        assertThat(content.showChannels).isTrue()
-    }
-
-    @Test
-    fun `возврат к категориям сохраняет выбранный канал`() = runTest {
-        playlist()
-        val model = viewModel()
-        model.state.first { it is HomeUiState.Content }
-        model.selectChannel(ChannelId("two"))
-        advanceUntilIdle()
-
-        model.showCategories()
-
-        val content = model.state.first { it is HomeUiState.Content } as HomeUiState.Content
-        assertThat(content.showChannels).isFalse()
-        assertThat(content.selectedChannelId).isEqualTo(ChannelId("two"))
+        assertThat(content.previewChannel?.channel?.id).isEqualTo(ChannelId("two"))
     }
 
     @Test
@@ -298,21 +290,7 @@ class HomeViewModelTest {
     }
 
     @Test
-    fun `выбранный канал сохраняется при переходе в категорию с ним`() = runTest {
-        playlist()
-        val model = viewModel()
-        model.state.first { it is HomeUiState.Content }
-        model.selectChannel(ChannelId("two"))
-        advanceUntilIdle()
-
-        model.selectCategory("кино")
-
-        val content = model.state.first { it is HomeUiState.Content && it.selectedCategoryId == "кино" } as HomeUiState.Content
-        assertThat(content.selectedChannelId).isEqualTo(ChannelId("two"))
-    }
-
-    @Test
-    fun `смена категории сохраняет тот же канал в превью`() = runTest {
+    fun `смена категории сохраняет тот же канал в карточке`() = runTest {
         playlist()
         val model = viewModel()
         model.state.first { it is HomeUiState.Content }
@@ -321,8 +299,163 @@ class HomeViewModelTest {
 
         model.selectCategory("основные")
 
-        val content = model.state.first { it is HomeUiState.Content && it.selectedCategoryId == "основные" } as HomeUiState.Content
+        val content = model.state.first {
+            it is HomeUiState.Content && it.selectedCategoryId == "основные"
+        } as HomeUiState.Content
         assertThat(content.selectedChannelId).isEqualTo(ChannelId("two"))
         assertThat(content.previewChannel?.channel?.id).isEqualTo(ChannelId("two"))
+    }
+
+    @Test
+    fun `раздел избранного показывает только избранные каналы`() = runTest {
+        playlist()
+        favoritesStore.toggle("two")
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content }
+
+        model.selectSection(HomeSection.FAVORITES)
+
+        val content = model.state.first {
+            it is HomeUiState.Content && it.section == HomeSection.FAVORITES
+        } as HomeUiState.Content
+        assertThat(content.channels.map { it.channel.name }).containsExactly("Киноканал")
+    }
+
+    @Test
+    fun `раздел недавних идёт в порядке просмотра`() = runTest {
+        playlist()
+        recentChannels.remember("two")
+        recentChannels.remember("one")
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content }
+
+        model.selectSection(HomeSection.RECENT)
+
+        val content = model.state.first {
+            it is HomeUiState.Content && it.section == HomeSection.RECENT
+        } as HomeUiState.Content
+        assertThat(content.channels.map { it.channel.name })
+            .containsExactly("Первый", "Киноканал")
+            .inOrder()
+    }
+
+    @Test
+    fun `поиск фильтрует каналы по подстроке без учёта регистра`() = runTest {
+        playlist()
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content }
+
+        model.setQuery("кино")
+
+        val content = model.state.first {
+            it is HomeUiState.Content && it.query == "кино"
+        } as HomeUiState.Content
+        assertThat(content.channels.map { it.channel.name }).containsExactly("Киноканал")
+    }
+
+    @Test
+    fun `закрытие поиска сбрасывает запрос и фильтр`() = runTest {
+        playlist()
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content }
+        model.setQuery("кино")
+
+        model.closeSearch()
+
+        val content = model.state.first {
+            it is HomeUiState.Content && it.query.isEmpty()
+        } as HomeUiState.Content
+        assertThat(content.channels).hasSize(2)
+    }
+
+    @Test
+    fun `смена раздела сбрасывает категорию и сохраняет выбранный канал`() = runTest {
+        playlist()
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content }
+        model.selectChannel(ChannelId("two"))
+        advanceUntilIdle()
+        model.selectCategory("кино")
+
+        model.selectSection(HomeSection.RECENT)
+
+        val content = model.state.first {
+            it is HomeUiState.Content && it.section == HomeSection.RECENT
+        } as HomeUiState.Content
+        assertThat(content.selectedCategoryId).isNull()
+        assertThat(content.selectedChannelId).isEqualTo(ChannelId("two"))
+    }
+
+    @Test
+    fun `разворот телепрограммы отдаёт расписание выбранного канала`() = runTest {
+        playlist()
+        epgStore.replace(
+            Epg(
+                channels = listOf(EpgChannel(id = "one", displayName = "Первый")),
+                programmes = listOf(
+                    Programme(
+                        channelId = "one",
+                        title = "Прошлая",
+                        start = now.minusSeconds(7200),
+                        end = now.minusSeconds(3600),
+                    ),
+                    Programme(
+                        channelId = "one",
+                        title = "Идёт сейчас",
+                        start = now.minusSeconds(1800),
+                        end = now.plusSeconds(1800),
+                    ),
+                ),
+            ),
+        )
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content }
+        model.selectChannel(ChannelId("one"))
+        advanceUntilIdle()
+
+        model.openProgramme()
+        advanceUntilIdle()
+
+        val content = model.state.first {
+            it is HomeUiState.Content && it.programmeOpen
+        } as HomeUiState.Content
+        assertThat(content.schedule.map { it.programme.title })
+            .containsExactly("Прошлая", "Идёт сейчас")
+            .inOrder()
+        assertThat(content.schedule.map { it.status })
+            .containsExactly(ProgrammeStatus.PAST, ProgrammeStatus.NOW)
+            .inOrder()
+    }
+
+    @Test
+    fun `сворачивание телепрограммы очищает расписание`() = runTest {
+        playlist()
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content }
+        model.selectChannel(ChannelId("one"))
+        advanceUntilIdle()
+        model.openProgramme()
+        advanceUntilIdle()
+
+        model.closeProgramme()
+
+        val content = model.state.first {
+            it is HomeUiState.Content && !it.programmeOpen
+        } as HomeUiState.Content
+        assertThat(content.schedule).isEmpty()
+    }
+
+    @Test
+    fun `избранное переключается и видно в состоянии`() = runTest {
+        playlist()
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content }
+
+        model.toggleFavorite(ChannelId("one"))
+
+        val content = model.state.first {
+            it is HomeUiState.Content && it.favorites.isNotEmpty()
+        } as HomeUiState.Content
+        assertThat(content.favorites).contains("one")
     }
 }

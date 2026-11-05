@@ -6,6 +6,7 @@ import androidx.work.Configuration
 import com.mops1k.smotrishka.tv.archive.ArchiveProbeRunner
 import com.mops1k.smotrishka.tv.core.data.EpgGuideRepository
 import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
+import com.mops1k.smotrishka.tv.core.data.GuideRefreshPlanner
 import com.mops1k.smotrishka.tv.core.data.UpdateScheduler
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
@@ -39,6 +40,9 @@ class SmotrishkaApplication : Application(), Configuration.Provider {
     @Inject
     lateinit var epgGuides: EpgGuideRepository
 
+    @Inject
+    lateinit var guideRefreshPlanner: GuideRefreshPlanner
+
     // В WorkManager 2.12 Configuration.Provider объявлен функцией, а не property.
     override fun getWorkManagerConfiguration(): Configuration =
         Configuration.Builder()
@@ -49,6 +53,14 @@ class SmotrishkaApplication : Application(), Configuration.Provider {
         super.onCreate()
         CrashGuard.install(this)
         updateScheduler.schedulePeriodic()
+        // Гид обновляется заранее — за час до конца покрытия, а не по фиксированному интервалу.
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching { guideRefreshPlanner.plan() }
+                .onSuccess { delay ->
+                    android.util.Log.d("SmotrishkaSync", "гид обновится через $delay мс")
+                }
+                .onFailure { android.util.Log.e("SmotrishkaSync", "guide plan failed", it) }
+        }
         // Стартовый набор гидов: без него фоновая программа передач не соберётся,
         // если у плейлиста нет своего адреса гида.
         CoroutineScope(Dispatchers.IO).launch {

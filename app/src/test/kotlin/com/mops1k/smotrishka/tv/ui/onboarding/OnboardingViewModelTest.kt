@@ -218,4 +218,56 @@ class OnboardingViewModelTest {
         val active = sourceRepository.active() as PlaylistSource.M3uUrl
         assertThat(active.url).isEqualTo("$base/new.m3u")
     }
+
+    @Test
+    fun `адрес без схемы отвергается текстом макета`() = runTest {
+        val model = viewModel()
+
+        model.submit(PlaylistSource.M3uUrl(url = "example.com/list.m3u"))
+
+        val state = model.state.first { it is OnboardingUiState.Error } as OnboardingUiState.Error
+        assertThat(state.reason).isEqualTo("Не удалось загрузить плейлист: проверьте адрес")
+        assertThat(server.requestCount).isEqualTo(0)
+    }
+
+    @Test
+    fun `пустой адрес даёт текст макета`() = runTest {
+        val model = viewModel()
+
+        model.submit(PlaylistSource.M3uUrl(url = ""))
+
+        val state = model.state.first { it is OnboardingUiState.Error } as OnboardingUiState.Error
+        assertThat(state.reason).isEqualTo("Укажите адрес плейлиста")
+    }
+
+    @Test
+    fun `xtream без сервера и логина отвергается текстом макета`() = runTest {
+        val model = viewModel()
+
+        model.submit(PlaylistSource.Xtream(server = "", username = "", password = ""))
+
+        val state = model.state.first { it is OnboardingUiState.Error } as OnboardingUiState.Error
+        assertThat(state.reason).isEqualTo("Укажите сервер и логин")
+        assertThat(server.requestCount).isEqualTo(0)
+    }
+
+    @Test
+    fun `пустой код iedem отвергается текстом макета`() = runTest {
+        val model = viewModel()
+
+        model.submit(PlaylistSource.IedemCode(code = "  "))
+
+        val state = model.state.first { it is OnboardingUiState.Error } as OnboardingUiState.Error
+        assertThat(state.reason).isEqualTo("Укажите код из личного кабинета iedem.tv")
+    }
+
+    @Test
+    fun `невыбранный файл отвергается текстом макета`() = runTest {
+        val model = viewModel()
+
+        model.submit(PlaylistSource.File(uri = "", name = null))
+
+        val state = model.state.first { it is OnboardingUiState.Error } as OnboardingUiState.Error
+        assertThat(state.reason).isEqualTo("Выберите файл плейлиста")
+    }
 }

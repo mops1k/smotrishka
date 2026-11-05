@@ -11,6 +11,12 @@ import androidx.room.RoomDatabase
  *
  * Версия 2: таблица пользовательских гидов программы передач
  * (миграция [DatabaseMigrations.MIGRATION_1_2]).
+ *
+ * Версия 3: полнотекстовый индекс поиска (`search_index`, FTS4) по каналам, категориям и
+ * передачам (миграция [DatabaseMigrations.MIGRATION_2_3]).
+ *
+ * Версия 4: индексы по времени передач — выборка «что идёт сейчас»
+ * (миграция [DatabaseMigrations.MIGRATION_3_4]).
  */
 @Database(
     entities = [
@@ -20,8 +26,10 @@ import androidx.room.RoomDatabase
         EpgChannelEntity::class,
         ProgrammeEntity::class,
         EpgGuideEntity::class,
+        SearchIndexEntity::class,
+        ChannelEpgEntity::class,
     ],
-    version = 2,
+    version = 5,
     exportSchema = false,
 )
 abstract class SmotrishkaDatabase : RoomDatabase() {
@@ -31,4 +39,8 @@ abstract class SmotrishkaDatabase : RoomDatabase() {
     abstract fun epgDao(): EpgDao
 
     abstract fun epgGuideDao(): EpgGuideDao
+
+    abstract fun searchDao(): SearchDao
+
+    abstract fun channelEpgDao(): ChannelEpgDao
 }

@@ -1,6 +1,7 @@
 package com.mops1k.smotrishka.tv.core.data
 
 import androidx.room.Entity
+import androidx.room.Index
 
 /**
  * Передача в базе программы передач.
@@ -17,7 +18,13 @@ import androidx.room.Entity
  * @param catchupId идентификатор для архивного запроса;
  * @param iconUrl кадр передачи.
  */
-@Entity(tableName = "programmes", primaryKeys = ["channelId", "startAt"])
+@Entity(
+    tableName = "programmes",
+    primaryKeys = ["channelId", "startAt"],
+    // Выборка окна «что идёт сейчас» идёт по времени; без индексов SQLite сканировал всю
+    // таблицу передач, и экран каналов открывался секундами (проверено 05.11.2026).
+    indices = [Index("startAt"), Index("endAt")],
+)
 data class ProgrammeEntity(
     val channelId: String,
     val startAt: Long,

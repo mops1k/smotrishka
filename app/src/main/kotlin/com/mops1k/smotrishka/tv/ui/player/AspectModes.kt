@@ -8,6 +8,7 @@ import com.mops1k.smotrishka.tv.core.data.AspectMode
  *
  * Вынесено из OSD, чтобы кнопка осталась тонкой, а поведение проверялось тестом.
  */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 object AspectModes {
 
     /** Порядок переключения по кругу. */

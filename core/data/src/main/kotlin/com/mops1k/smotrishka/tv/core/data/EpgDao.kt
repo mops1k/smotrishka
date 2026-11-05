@@ -47,6 +47,32 @@ interface EpgDao {
     @Query("SELECT COUNT(DISTINCT channelId) FROM programmes WHERE endAt > :fromAt AND startAt < :toAt")
     suspend fun countCoveredChannels(fromAt: Long, toAt: Long): Int
 
+    /** Передачи, пересекающиеся с интервалом: нужно для индекса поиска. */
+    @Query("SELECT * FROM programmes WHERE endAt > :fromAt AND startAt < :toAt")
+    suspend fun programmesInRange(fromAt: Long, toAt: Long): List<ProgrammeEntity>
+
+    /**
+     * Передачи, начавшиеся в интервале.
+     *
+     * В отличие от [programmesInRange] это условие опирается на индекс `startAt`: границы
+     * заданы с двух сторон. Запрос «endAt > :fromAt AND startAt < :toAt» индекс не использует
+     * и читает всю таблицу — на приставке это не укладывалось в 8 секунд (05.11.2026).
+     */
+    @Query("SELECT * FROM programmes WHERE startAt >= :fromAt AND startAt <= :toAt")
+    suspend fun programmesStartingBetween(fromAt: Long, toAt: Long): List<ProgrammeEntity>
+
+    /** Сколько каналов гида имеют иконку. */
+    @Query("SELECT COUNT(*) FROM epg_channels WHERE iconUrl IS NOT NULL AND iconUrl != ''")
+    suspend fun countIcons(): Int
+
+    /** Иконки каналов гида для указанных идентификаторов. */
+    @Query("SELECT id, iconUrl FROM epg_channels WHERE id IN (:ids)")
+    suspend fun iconsFor(ids: List<String>): List<EpgIconRow>
+
+    /** Последнее время окончания передачи: до какого момента гид покрывает эфир. */
+    @Query("SELECT MAX(endAt) FROM programmes")
+    suspend fun maxEndAt(): Long?
+
     @Query("DELETE FROM programmes")
     suspend fun deleteProgrammes()
 

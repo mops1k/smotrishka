@@ -1,5 +1,13 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
+import java.util.Properties
+
+// Ключ релиза лежит вне репозитория: ~/.android-keystores/smotrishka-release.properties.
+// Файла нет (другая машина, CI) — release подписывается отладочным ключом, как раньше.
+val releaseKeystoreProps: Properties? = run {
+    val file = File(System.getProperty("user.home"), ".android-keystores/smotrishka-release.properties")
+    if (!file.exists()) null else Properties().apply { file.inputStream().use { load(it) } }
+}
 
 plugins {
     alias(libs.plugins.android.application)
@@ -30,9 +38,16 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            // Для тестовых сборок подписываем отладочным ключом: установка на приставку
-            // иначе невозможна. Для поставки нужен собственный ключ — отдельным решением.
-            signingConfig = signingConfigs.getByName("debug")
+            // Свой ключ релиза, если он есть на этой машине; иначе отладочный ключ,
+            // иначе APK нельзя установить на приставку.
+            signingConfig = releaseKeystoreProps?.let { props ->
+                signingConfigs.create("release") {
+                    storeFile = File(props.getProperty("storeFile"))
+                    storePassword = props.getProperty("storePassword")
+                    keyAlias = props.getProperty("keyAlias")
+                    keyPassword = props.getProperty("keyPassword")
+                }
+            } ?: signingConfigs.getByName("debug")
         }
     }
 

@@ -31,6 +31,25 @@ class UpdateScheduler(private val workManager: WorkManager) {
         )
     }
 
+    /**
+     * Планирует обновление гида к концу покрытия.
+     *
+     * Гид обновляется за час до последней передачи в базе: так он приходит заранее и без
+     * пробела в программе. Существующая задача заменяется — срок всегда считается заново.
+     *
+     * @param delayMillis через сколько запустить обновление (0 — сразу).
+     */
+    fun scheduleGuideRefresh(delayMillis: Long) {
+        workManager.enqueueUniqueWork(
+            GUIDE_REFRESH_NAME,
+            ExistingWorkPolicy.REPLACE,
+            OneTimeWorkRequestBuilder<CatalogSyncWorker>()
+                .setInitialDelay(delayMillis.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+                .setConstraints(networkConstraints())
+                .build(),
+        )
+    }
+
     /** Запускает обновление один раз (например, при открытии приложения). */
     fun syncNow() {
         workManager.enqueueUniqueWork(
@@ -50,6 +69,10 @@ class UpdateScheduler(private val workManager: WorkManager) {
     companion object {
         const val PERIODIC_NAME = "catalog-sync-periodic"
         const val ONE_SHOT_NAME = "catalog-sync-now"
+        const val GUIDE_REFRESH_NAME = "guide-refresh"
         const val REFRESH_INTERVAL_HOURS = 6L
+
+        /** За сколько до конца покрытия обновлять гид: час запаса на загрузку и разбор. */
+        const val GUIDE_LEAD_HOURS = 1L
     }
 }

@@ -6,12 +6,21 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import com.mops1k.smotrishka.tv.core.data.SourceRepository
 import com.mops1k.smotrishka.tv.core.designsystem.theme.SmotrishkaTvTheme
 import com.mops1k.smotrishka.tv.ui.AppNavHost
 import com.mops1k.smotrishka.tv.ui.Route
+import com.mops1k.smotrishka.tv.ui.common.LocalToastController
+import com.mops1k.smotrishka.tv.ui.common.rememberDeviceProfile
+import com.mops1k.smotrishka.tv.core.designsystem.component.LocalReduceMotion
+import com.mops1k.smotrishka.tv.ui.common.ToastController
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -39,13 +48,32 @@ class MainActivity : ComponentActivity() {
         // канале пользователь может долго ждать картинку, не трогая пульт.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        // Системные панели скрыты для всего приложения, а не только в плеере: интерфейс
+        // рассчитан на полный экран, статус-бар и панель навигации перекрывают контент.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+
         setContent {
             SmotrishkaTvTheme {
-                val startDestination by produceState<String?>(initialValue = null) {
-                    value = if (sourceRepository.active() != null) Route.HOME else Route.ONBOARDING
-                }
+                // Один тост на всё приложение: он переживает переход между экранами.
+                val toastController = remember { ToastController() }
+                // Слабые приставки: анимации выключаем, интерфейс реагирует сразу.
+                val device = rememberDeviceProfile()
+                val reduceMotion = device.isLowRam
+                CompositionLocalProvider(
+                    LocalToastController provides toastController,
+                    LocalReduceMotion provides reduceMotion,
+                ) {
+                    val startDestination by produceState<String?>(initialValue = null) {
+                        value = if (sourceRepository.active() != null) Route.HOME else Route.ONBOARDING
+                    }
 
-                startDestination?.let { route -> AppNavHost(startDestination = route) }
+                    startDestination?.let { route -> AppNavHost(startDestination = route) }
+                }
             }
         }
 

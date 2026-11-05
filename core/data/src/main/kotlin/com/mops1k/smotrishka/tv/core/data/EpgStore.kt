@@ -120,6 +120,51 @@ class EpgStore(
     suspend fun programmes(channelId: String, from: Instant, to: Instant): List<Programme> =
         dao.programmes(channelId, from.toEpochMilli(), to.toEpochMilli()).map(mapper::toModel)
 
+    /**
+     * Передачи всего окна сразу, сгруппированные по каналу EPG.
+     *
+     * Экран каналов раньше спрашивал базу отдельно на каждый канал: на каталоге в 3752 канала это
+     * давало больше десяти секунд до появления списка. Один запрос на всё окно решает проблему.
+     *
+     * @param from начало интервала;
+     * @param to конец интервала.
+     */
+    suspend fun programmesByChannel(from: Instant, to: Instant): Map<String, List<Programme>> =
+        // Нижняя граница сдвинута на максимальную длительность передачи: иначе передачи,
+        // начавшиеся до окна и всё ещё идущие, в выборку не попадут.
+        dao.programmesStartingBetween(
+            fromAt = from.minus(PROGRAMME_MAX_HOURS, ChronoUnit.HOURS).toEpochMilli(),
+            toAt = to.toEpochMilli(),
+        )
+            .map(mapper::toModel)
+            // Пересечение с окном проверяем уже в памяти — по индексированному диапазону.
+            .filter { it.end.isAfter(from) }
+            .groupBy { it.channelId }
+
+    /**
+     * До какого момента гид покрывает эфир.
+     *
+     * По этому времени планируется обновление: гид обновляется за час до конца покрытия,
+     * а не по расписанию «каждые N часов». Глубина покрытия зависит от источника и настроек.
+     */
+    suspend fun coverageEnd(): Instant? = dao.maxEndAt()?.let { Instant.ofEpochMilli(it) }
+
+    /** Сколько каналов гида имеют иконку: по этому признаку видно, нужен ли переимпорт. */
+    suspend fun iconCount(): Int = dao.countIcons()
+
+    /**
+     * Иконки каналов гида.
+     *
+     * @param epgIds нужные идентификаторы каналов гида.
+     * @return соответствие «канал гида → адрес иконки» (только непустые).
+     */
+    suspend fun icons(epgIds: Collection<String>): Map<String, String> {
+        if (epgIds.isEmpty()) return emptyMap()
+        return dao.iconsFor(epgIds.toList())
+            .mapNotNull { row -> row.iconUrl?.takeIf { it.isNotBlank() }?.let { row.id to it } }
+            .toMap()
+    }
+
     /** Каналы EPG. */
     suspend fun epgChannels(): List<EpgChannel> = dao.channels().map(mapper::toModel)
 
@@ -147,5 +192,8 @@ class EpgStore(
 
     private companion object {
         const val WINDOW_FORWARD_HOURS = 48L
+
+        /** Максимальная длительность передачи: запас для нижней границы выборки. */
+        const val PROGRAMME_MAX_HOURS = 8L
     }
 }

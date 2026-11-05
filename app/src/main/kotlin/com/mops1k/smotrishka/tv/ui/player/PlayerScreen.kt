@@ -4,9 +4,15 @@ import android.graphics.Matrix
 import android.view.TextureView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import com.mops1k.smotrishka.tv.core.designsystem.component.LocalReduceMotion
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -14,6 +20,7 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -60,6 +67,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -78,12 +86,10 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.key.type
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.foundation.focusable
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -119,6 +125,12 @@ import com.mops1k.smotrishka.tv.core.data.AudioLanguage
 import com.mops1k.smotrishka.tv.core.data.VideoQuality
 import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.ui.home.ProgrammeProgress
+import com.mops1k.smotrishka.tv.ui.home.ProgrammeRowUi
+import com.mops1k.smotrishka.tv.ui.home.ProgrammeStatus
+import com.mops1k.smotrishka.tv.ui.home.components.ChannelLogo
+import com.mops1k.smotrishka.tv.ui.player.osd.OsdCircleButton
+import com.mops1k.smotrishka.tv.ui.player.osd.PlayerOsdTop
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -129,6 +141,9 @@ import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import com.mops1k.smotrishka.tv.R
+import androidx.compose.ui.focus.onFocusChanged
+import com.mops1k.smotrishka.tv.core.designsystem.theme.TvColors
 
 /**
  * Полноэкранный плеер канала.
@@ -157,13 +172,16 @@ fun PlayerScreen(
     val quality by viewModel.videoQuality.collectAsStateWithLifecycle()
     val direct by viewModel.directStream.collectAsStateWithLifecycle(initialValue = true)
     val aspectMode by viewModel.aspectMode.collectAsStateWithLifecycle(initialValue = AspectMode.FIT)
-    val recents by viewModel.recents.collectAsStateWithLifecycle(initialValue = emptyList<Pair<String, String>>())
+    val recents by viewModel.recents.collectAsStateWithLifecycle(initialValue = emptyList<RecentChannelRef>())
     val favorites by viewModel.favorites.collectAsStateWithLifecycle(initialValue = emptySet<String>())
     val bufferPreferred by viewModel.bufferPreferred.collectAsStateWithLifecycle(initialValue = false)
     val unstable by viewModel.unstable.collectAsStateWithLifecycle(initialValue = false)
     val neighbours by viewModel.neighbours.collectAsStateWithLifecycle(initialValue = null to null)
     val channelsInScope by viewModel.channelsInScope
         .collectAsStateWithLifecycle(initialValue = emptyList<ChannelRef>())
+    val schedule by viewModel.schedule
+        .collectAsStateWithLifecycle(initialValue = emptyList<ProgrammeRowUi>())
+    val osdHideSeconds by viewModel.osdHideSeconds.collectAsStateWithLifecycle()
 
     // Передача в OSD перепроверяется, пока плеер открыт: иначе к концу передачи остаётся
     // «Программа закончилась» и заполненная полоса.
@@ -228,6 +246,8 @@ fun PlayerScreen(
                 onSwitchChannel = onOpenRecent,
                 onGoLive = { onGoLive(current.channelId) },
                 onOpenArchive = onOpenArchive,
+                schedule = schedule,
+                osdHideSeconds = osdHideSeconds,
             )
         }
     }
@@ -241,6 +261,7 @@ fun PlayerScreen(
  * @param onBack возврат к списку каналов.
  */
 @Composable
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 private fun PlayerContent(
     channel: PlayerUiState.Content,
     bufferSeconds: Int,
@@ -252,7 +273,7 @@ private fun PlayerContent(
     onOpenProgramme: (ChannelId) -> Unit,
     aspectMode: AspectMode,
     onCycleAspect: () -> Unit,
-    recents: List<Pair<String, String>>,
+    recents: List<RecentChannelRef>,
     onOpenRecent: (String) -> Unit,
     channels: List<ChannelRef>,
     favorites: Set<String>,
@@ -265,14 +286,40 @@ private fun PlayerContent(
     onSwitchChannel: (String) -> Unit,
     onGoLive: () -> Unit,
     onOpenArchive: (ChannelId, Instant) -> Unit,
+    schedule: List<ProgrammeRowUi>,
+    // Сколько секунд меню плеера остаётся на экране (значение из настроек).
+    osdHideSeconds: Int,
 ) {
     val context = LocalContext.current
     var recentsVisible by remember { mutableStateOf(false) }
     var channelsVisible by remember { mutableStateOf(false) }
-    var backPressedAt by remember { mutableStateOf(0L) }
+    // Фокус внутри OSD: пока он там, влево/вправо принадлежат кнопкам и полосе программы,
+    // иначе корневой обработчик перехватывал их и открывал список каналов.
+    var osdFocused by remember { mutableStateOf(false) }
+    // Телепрограмма открывается панелью поверх видео, как список каналов и «Недавние»,
+    // а не отдельным экраном (указание Александра 06.11.2026).
+    var programmeVisible by remember { mutableStateOf(false) }
+    // Таймер удержания «назад»: короткое нажатие выходит, удержание открывает недавние.
+    var backHeld by remember { mutableStateOf(false) }
+    var backPressJob by remember { mutableStateOf<Job?>(null) }
     val scope = rememberCoroutineScope()
-    val controls = rememberPlayerControls()
+    // Отдельный Job на распознавание удержания «назад».
+    val backPressScope = scope
+    val controls = rememberPlayerControls(hideSeconds = osdHideSeconds)
     val controlsState by controls.state.collectAsStateWithLifecycle()
+    // Фокус в OSD при открытии: иначе он остаётся на плеере и кнопки не работают.
+    val osdFirstFocus = remember { FocusRequester() }
+    LaunchedEffect(controlsState.osdVisible) {
+        if (!controlsState.osdVisible) return@LaunchedEffect
+        // Несколько попыток: OSD появляется через AnimatedVisibility, и первая заявка
+        // на фокус может прийти до того, как кнопка попадёт в композицию.
+        repeat(8) {
+            if (osdFocused) return@LaunchedEffect
+            withFrameNanos { }
+            runCatching { osdFirstFocus.requestFocus() }
+            delay(60)
+        }
+    }
     val buffer = remember(bufferSeconds) { PlayerBuffer(bufferSeconds) }
 
     var unavailable by remember(channel.streamUrl) { mutableStateOf(false) }
@@ -310,6 +357,9 @@ private fun PlayerContent(
         0
     }
     var firstFrame by remember(channel.streamUrl) { mutableStateOf(false) }
+    // Поверхность перепривязывается, когда поток дошёл до READY: без этого на части устройств
+    // кадр не показывается, пока пользователь не тронет экран (загрузка висит, звук идёт).
+    var playerReady by remember(channel.streamUrl) { mutableStateOf(false) }
     var playerCreatedAt by remember(channel.streamUrl) { mutableStateOf(0L) }
     var server by remember(channel.streamUrl) { mutableStateOf<LocalHlsServer?>(null) }
     // Прокси не смог отдать ни одного сегмента — возвращаемся к прямому потоку.
@@ -321,29 +371,29 @@ private fun PlayerContent(
     // поток догонит сам, как только сеть вернётся.
     var streamProblem by remember(channel.streamUrl) { mutableStateOf(false) }
 
-    // Автодетект: пока играем прямым потоком, следим за откатами и затяжными остановками.
-    // Набралось достаточно признаков — переводим этот канал на буфер, не спрашивая пользователя.
+    // Наблюдение за откатами и затяжными остановками прямого потока.
+    // Режим эфира выбирает только настройка: раньше здесь канал автоматически уводился
+    // на локальный буфер, и на приставке это давало обратный эффект — плеер создавался
+    // заново, стартовал почти без запаса и постоянно переключался «буферизация ↔ играет»,
+    // что и выглядело как микрофризы. ott-play на этой же приставке играет напрямую и плавно.
     LaunchedEffect(playerRef, useBuffer) {
         val active = playerRef ?: return@LaunchedEffect
         if (useBuffer) return@LaunchedEffect
         val events = mutableListOf<Long>()
         var lastPosition = 0L
-        var bufferingSince = 0L
         while (true) {
             delay(ANOMALY_POLL_MS)
             val now = System.currentTimeMillis()
             val position = active.currentPosition
-            // Чёрный экран без первого кадра — тоже признак проблемы: переключаем на буфер.
             if (!firstFrame && now - playerCreatedAt >= StreamAnomaly.STALL_MILLIS * 2) events += now
-            if (StreamAnomaly.isRewind(lastPosition, position)) events += now
-            // Обычную буферизацию признаком не считаем: она бывает и на здоровых каналах.
-            bufferingSince = 0L
+            if (StreamAnomaly.isRewind(lastPosition, position)) {
+                events += now
+                android.util.Log.d("SmotrishkaBuffer", "anomaly: откат позиции $lastPosition → $position")
+            }
             lastPosition = position
             if (StreamAnomaly.shouldSwitch(events, now)) {
-                autoBuffer = true
-                // Запоминаем: в следующий раз канал сразу пойдёт через буфер.
-                onRememberBuffered()
-                return@LaunchedEffect
+                android.util.Log.w("SmotrishkaBuffer", "поток нестабилен: признаков ${events.size}")
+                events.clear()
             }
         }
     }
@@ -635,6 +685,7 @@ private fun PlayerContent(
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
+                playerReady = playbackState == androidx.media3.common.Player.STATE_READY
                 android.util.Log.d(
                     "SmotrishkaBuffer",
                     "player state=$playbackState position=${player.currentPosition} duration=${player.duration}",
@@ -682,6 +733,20 @@ private fun PlayerContent(
         }
     }
 
+    // Пульт: Compose рассылает клавиши только по цепочке фокуса. Пока на экране нет ни
+    // одного сфокусированного элемента, onPreviewKeyEvent ниже не вызывается вовсе —
+    // отсюда были «мёртвые» ОК и стрелки при работающей кнопке «назад» (её ловит навигация).
+    val rootFocus = remember { FocusRequester() }
+
+    // Фокус живёт на корне, пока не открыт OSD или панели: иначе пульт перестаёт
+    // доходить до обработчика клавиш (например, после закрытия списка каналов).
+    LaunchedEffect(controlsState.osdVisible, channelsVisible, recentsVisible) {
+        if (!controlsState.osdVisible && !channelsVisible && !recentsVisible) {
+            withFrameNanos { }
+            runCatching { rootFocus.requestFocus() }
+        }
+    }
+
     // Плеер стартует сам: пауза возможна только по действию пользователя.
     LaunchedEffect(controlsState.muted) {
         player.volume = if (controlsState.muted) 0f else 1f
@@ -690,6 +755,8 @@ private fun PlayerContent(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .focusRequester(rootFocus)
+            .focusable()
             // Касание пустого места переключает OSD. Именно касание, а не clickable:
             // clickable на ТВ ловит и нажатие OK с пульта (фокус на этом же Box), из-за чего
             // OSD показывался обработчиком клавиши и тут же прятался кликом.
@@ -727,29 +794,61 @@ private fun PlayerContent(
             .onPreviewKeyEvent { event ->
                 // «Назад»: короткое нажатие — выход из плеера, долгое удержание — панель
                 // недавних каналов. Из плеера при удержании не выходим.
+                // OSD открыт, но фокус остался на плеере: переводим его внутрь OSD,
+                // иначе крестовина и OK «не отзываются».
+                if (controlsState.osdVisible && !osdFocused && !channelsVisible && !recentsVisible) {
+                    runCatching { osdFirstFocus.requestFocus() }
+                }
+                // Любое действие пультом при открытом OSD сбрасывает таймер автоскрытия:
+                // раньше счёт шёл от открытия меню, и оно гасло прямо во время навигации.
+                if (event.type == KeyEventType.KeyDown && controlsState.osdVisible) {
+                    controls.onInteraction()
+                }
+                // Единое правило: пока открыт любой оверлей (список каналов, недавние,
+                // телепрограмма), OK принадлежит ему, а не OSD плеера (указание 07.11.2026).
+                val overlayOpen = channelsVisible || recentsVisible || programmeVisible
                 if (event.key == Key.Back) {
-                    val now = System.currentTimeMillis()
+                    // Выход больше не ждёт KeyUp: на этой приставке отпускание клавиши до
+                    // обработчика не доходило, и из плеера нельзя было выйти вообще.
+                    // Короткое нажатие выходит сразу; удержание (повторные KeyDown) открывает
+                    // панель недавних каналов.
                     when (event.type) {
                         KeyEventType.KeyDown -> {
-                            backPressedAt = now
+                            if (event.nativeKeyEvent.repeatCount == 0) {
+                                backHeld = false
+                                backPressJob?.cancel()
+                                backPressJob = scope.launch {
+                                    delay(LONG_BACK_PRESS_MS)
+                                    backHeld = true
+                                    // OSD прячем: иначе он рисуется поверх панели недавних
+                                    // и перекрывает её.
+                                    controls.hideOsd()
+                                    recentsVisible = true
+                                }
+                            }
                             true
                         }
                         KeyEventType.KeyUp -> {
-                            val held = now - backPressedAt
+                            backPressJob?.cancel()
+                            backPressJob = null
                             when {
+                                // Удержание уже открыло панель — просто оставляем её.
+                                backHeld -> {
+                                    backHeld = false
+                                    true
+                                }
                                 // Оверлей списка открыт: «назад» закрывает только его.
                                 channelsVisible -> {
                                     channelsVisible = false
                                     true
                                 }
-                                // Панель открыта: «назад» только скрывает её, из плеера не выходим.
+                                // Панель открыта: «назад» скрывает её, из плеера не выходим.
                                 recentsVisible -> {
                                     recentsVisible = false
                                     true
                                 }
-                                held >= LONG_BACK_PRESS_MS -> {
-                                    controls.onInteraction()
-                                    recentsVisible = true
+                                programmeVisible -> {
+                                    programmeVisible = false
                                     true
                                 }
                                 else -> {
@@ -760,13 +859,39 @@ private fun PlayerContent(
                         }
                         else -> false
                     }
+                } else if (
+                    event.key == Key.Enter ||
+                    event.key == Key.DirectionCenter ||
+                    event.key == Key.NumPadEnter
+                ) {
+                    // OK: при скрытом OSD показывает его и забирает событие себе, чтобы оно
+                    // не «проваливалось» в общую ветку и не проходило дважды. Если открыта
+                    // панель телепрограммы, OK принадлежит её строкам.
+                    if (!controlsState.osdVisible && !overlayOpen) {
+                        if (event.type == KeyEventType.KeyDown) controls.onInteraction()
+                        true
+                    } else {
+                        false
+                    }
                 } else if (event.key == Key.DirectionLeft) {
+                    // Фокус внутри OSD: влево/вправо отдаём элементам OSD (кнопки, полоса
+                    // программы), иначе перемотка полосой была недоступна с пульта.
+                    if (osdFocused) {
+                        return@onPreviewKeyEvent false
+                    }
                     // Клавиша «влево» целиком наша: если отпустить её в общую ветку, KeyUp
                     // показывал OSD поверх открытого списка и прятал его собой.
-                    val ownKey = !controlsState.osdVisible && channels.isNotEmpty()
                     when {
-                        !ownKey -> false
                         event.type != KeyEventType.KeyDown -> true
+                        // Панель «Недавние» закрываем: список каналов открывается вместо неё.
+                        recentsVisible -> {
+                            recentsVisible = false
+                            true
+                        }
+                        programmeVisible -> {
+                            programmeVisible = false
+                            true
+                        }
                         else -> {
                             // Список перекрывает OSD: иначе кнопки и полоса программы
                             // остаются видны поверх него.
@@ -775,9 +900,21 @@ private fun PlayerContent(
                             true
                         }
                     }
-                } else if (event.key == Key.DirectionUp || event.key == Key.DirectionDown) {
-                    if (channelsVisible || controlsState.osdVisible) {
-                        // Список каналов или OSD: крестовина принадлежит им, канал не переключаем.
+                } else if (event.key == Key.DirectionRight) {
+                    // «Вправо» при закрытом OSD открывает телепрограмму-surface.
+                    // Когда OSD открыт, клавиша принадлежит элементам OSD (полоса программы
+                    // перематывает вправо), поэтому событие не перехватываем.
+                    if (channelsVisible || recentsVisible || programmeVisible || controlsState.osdVisible) {
+                        false
+                    } else {
+                        if (event.type == KeyEventType.KeyDown) {
+                            controls.hideOsd()
+                            programmeVisible = true
+                        }
+                        true
+                    }                } else if (event.key == Key.DirectionUp || event.key == Key.DirectionDown) {
+                    if (channelsVisible || recentsVisible || programmeVisible || controlsState.osdVisible) {
+                        // Список каналов, недавние или OSD: крестовина принадлежит им.
                         false
                     } else {
                         if (event.type == KeyEventType.KeyDown) {
@@ -789,7 +926,7 @@ private fun PlayerContent(
                     }
                 } else {
                     // Пока список открыт, OSD не показываем: он рисуется поверх и закрывает его.
-                    if (!channelsVisible) controls.onInteraction()
+                    if (!channelsVisible && !recentsVisible) controls.onInteraction()
                     false
                 }
             },
@@ -811,7 +948,7 @@ private fun PlayerContent(
             },
         )
 
-        if (!firstFrame) {
+        if (!firstFrame && !playerReady) {
             // Держим надпись до первого кадра: иначе между буфером и картинкой виден чёрный экран.
             Box(
                 modifier = Modifier
@@ -847,12 +984,126 @@ private fun PlayerContent(
             )
         }
 
-        if (recentsVisible) {
-            // Панель недавних каналов: свежие сверху, выбор открывает канал и остаётся в плеере.
+        if (programmeVisible) {
+            // Телепрограмма текущего канала: то же оформление, что у списка каналов.
+            val programmeState = rememberLazyListState()
+            val currentProgramme = remember { FocusRequester() }
+            val nowIndex = schedule.indexOfFirst { it.status == ProgrammeStatus.NOW }
+            LaunchedEffect(programmeVisible, schedule.size) {
+                val visible = programmeState.layoutInfo.visibleItemsInfo.size.takeIf { it > 0 } ?: 5
+                programmeState.scrollToItem((nowIndex.coerceAtLeast(0) - visible / 2).coerceAtLeast(0))
+                withFrameNanos { }
+                runCatching { currentProgramme.requestFocus() }
+            }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.92f))
+                    .background(Color.Black.copy(alpha = 0.94f))
+                    .padding(horizontal = 48.dp, vertical = 28.dp),
+            ) {
+                Text(
+                    text = "Телепрограмма",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White,
+                )
+                Spacer(Modifier.height(12.dp))
+                if (schedule.isEmpty()) {
+                    Text(
+                        text = "Программы нет",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Color.White.copy(alpha = 0.7f),
+                    )
+                } else {
+                    LazyColumn(state = programmeState, modifier = Modifier.weight(1f)) {
+                        itemsIndexed(
+                            items = schedule,
+                            key = { _, row -> "${row.programme.start}_${row.programme.title}" },
+                        ) { index, row ->
+                            val current = row.status == ProgrammeStatus.NOW
+                            val canOpen = !(row.status == ProgrammeStatus.PAST && !row.hasArchive)
+                            var rowFocused by remember { mutableStateOf(false) }
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(
+                                        when {
+                                            rowFocused -> TvColors.accent
+                                            current -> TvColors.rowSelectedStart
+                                            else -> Color.Transparent
+                                        },
+                                    )
+                                    .onFocusChanged { rowFocused = it.isFocused }
+                                    .then(if (index == nowIndex) Modifier.focusRequester(currentProgramme) else Modifier)
+                                    .clickable {
+                                        if (!canOpen) {
+                                            // Прошедшая передача без архива: смотреть нечего —
+                                            // OK просто убирает OSD с экрана (указание 06.11.2026).
+                                            programmeVisible = false
+                                            controls.hideOsd()
+                                        } else {
+                                            programmeVisible = false
+                                            if (
+                                                row.status == ProgrammeStatus.PAST ||
+                                                row.status == ProgrammeStatus.NOW
+                                            ) {
+                                                onOpenArchive(channel.channelId, row.programme.start)
+                                            }
+                                        }
+                                    }
+                                    .focusable()
+                                    .padding(vertical = 8.dp, horizontal = 8.dp),
+                            ) {
+                                Text(
+                                    text = row.programme.start.atZone(ZoneId.systemDefault())
+                                        .toLocalTime().toString().take(5) +
+                                        " – " +
+                                        row.programme.end.atZone(ZoneId.systemDefault())
+                                            .toLocalTime().toString().take(5),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = when {
+                                        rowFocused -> Color(0xFF100A1E).copy(alpha = 0.75f)
+                                        !canOpen -> TvColors.programmePast.copy(alpha = 0.8f)
+                                        else -> Color.White.copy(alpha = 0.65f)
+                                    },
+                                    maxLines = 1,
+                                )
+                                Text(
+                                    text = row.programme.title,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    // Прошедшая передача без архива — серым: смотреть её нельзя.
+                                    color = when {
+                                        rowFocused -> Color(0xFF100A1E)
+                                        current -> TvColors.accent
+                                        !canOpen -> TvColors.programmePast
+                                        row.status == ProgrammeStatus.PAST -> Color.White.copy(alpha = 0.55f)
+                                        else -> Color.White
+                                    },
+                                    fontWeight = if (current || rowFocused) FontWeight.Medium else FontWeight.Normal,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (recentsVisible) {
+            // Панель недавних каналов устроена так же, как список каналов: тот же LazyColumn,
+            // тот же фокус и та же подсветка. Раньше здесь был простой Column, и пульт
+            // не мог по строкам ходить.
+            val recentsState = rememberLazyListState()
+            val currentRecent = remember { FocusRequester() }
+            LaunchedEffect(recentsVisible, recents.size) {
+                withFrameNanos { }
+                runCatching { currentRecent.requestFocus() }
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.94f))
                     .padding(horizontal = 48.dp, vertical = 28.dp),
             ) {
                 Text(
@@ -861,20 +1112,70 @@ private fun PlayerContent(
                     color = Color.White,
                 )
                 Spacer(Modifier.height(12.dp))
-                recents.forEach { (id, name) ->
-                    Text(
-                        text = name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = Color.White,
-                        maxLines = 1,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                recentsVisible = false
-                                onOpenRecent(id)
+                LazyColumn(state = recentsState, modifier = Modifier.weight(1f)) {
+                    items(items = recents, key = { it.id }) { item ->
+                        val current = item.id == channel.channelId.value
+                        var rowFocused by remember { mutableStateOf(false) }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (rowFocused) TvColors.accent else Color.Transparent)
+                                .onFocusChanged { rowFocused = it.isFocused }
+                                .then(
+                                    if (current) Modifier.focusRequester(currentRecent) else Modifier,
+                                )
+                                .clickable {
+                                    recentsVisible = false
+                                    onOpenRecent(item.id)
+                                }
+                                .focusable()
+                                .then(
+                                    if (rowFocused) {
+                                        Modifier.border(
+                                            3.dp,
+                                            TvColors.focusOutline,
+                                            RoundedCornerShape(8.dp),
+                                        )
+                                    } else {
+                                        Modifier
+                                    },
+                                )
+                                .padding(vertical = 8.dp, horizontal = 8.dp),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                ChannelLogo(name = item.name, url = item.logoUrl, size = 32.dp)
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    text = item.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = when {
+                                        rowFocused -> Color(0xFF100A1E)
+                                        current -> TvColors.accent
+                                        else -> Color.White
+                                    },
+                                    fontWeight = if (current || rowFocused) FontWeight.Medium else FontWeight.Normal,
+                                    maxLines = 1,
+                                )
                             }
-                            .padding(vertical = 8.dp),
-                    )
+                            // Текущая передача — как в списке каналов OSD, тонким шрифтом.
+                            item.programmeTitle?.let { title ->
+                                Text(
+                                    text = title,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Light,
+                                    modifier = Modifier.padding(start = 42.dp),
+                                    color = when {
+                                        rowFocused -> Color(0xFF100A1E).copy(alpha = 0.75f)
+                                        current -> TvColors.accent.copy(alpha = 0.8f)
+                                        else -> Color.White.copy(alpha = 0.65f)
+                                    },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -906,15 +1207,13 @@ private fun PlayerContent(
                 LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
                     items(items = channels, key = { it.id }) { item ->
                         val current = item.id == channel.channelId.value
-                        Text(
-                            text = item.name,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (current) MaterialTheme.colorScheme.primary else Color.White,
-                            fontWeight = if (current) FontWeight.Medium else FontWeight.Normal,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                        var rowFocused by remember { mutableStateOf(false) }
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (rowFocused) TvColors.accent else Color.Transparent)
+                                .onFocusChanged { rowFocused = it.isFocused }
                                 .clickable {
                                     channelsVisible = false
                                     onSwitchChannel(item.id)
@@ -927,8 +1226,46 @@ private fun PlayerContent(
                                     },
                                 )
                                 .focusable()
-                                .padding(vertical = 8.dp),
+                                .padding(vertical = 6.dp, horizontal = 8.dp),
+                        ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            ChannelLogo(
+                                name = item.name,
+                                url = item.logoUrl,
+                                size = 32.dp,
+                            )
+                            Spacer(Modifier.width(10.dp))
+                        Text(
+                            text = item.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = when {
+                                // Фокус в списке каналов поверх плеера: инверсия, чтобы
+                                // строка под пультом читалась сразу.
+                                rowFocused -> Color(0xFF100A1E)
+                                current -> MaterialTheme.colorScheme.primary
+                                else -> Color.White
+                            },
+                            fontWeight = if (current || rowFocused) FontWeight.Medium else FontWeight.Normal,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
+                        }
+                            item.programmeTitle?.let { title ->
+                                Text(
+                                    text = title,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Light,
+                                    modifier = Modifier.padding(start = 42.dp),
+                                    color = when {
+                                        rowFocused -> Color(0xFF100A1E).copy(alpha = 0.75f)
+                                        current -> MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                                        else -> Color.White.copy(alpha = 0.65f)
+                                    },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -962,18 +1299,21 @@ private fun PlayerContent(
             UnavailableStream(onBack = onBack)
         }
 
+        val reduceMotion = LocalReduceMotion.current
         AnimatedVisibility(
             // OSD не прячем даже при ошибке потока: иначе на экране «Поток недоступен»
             // кнопка OK не даёт ничего, и из плеера нельзя ни выйти, ни переключиться.
             visible = controlsState.osdVisible,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            // Слабая приставка: OSD появляется сразу, без анимации.
+            enter = if (reduceMotion) EnterTransition.None else fadeIn(),
+            exit = if (reduceMotion) ExitTransition.None else fadeOut(),
             modifier = Modifier.fillMaxSize(),
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.35f)),
+                    .background(Color.Black.copy(alpha = 0.35f))
+                    .onFocusChanged { osdFocused = it.hasFocus },
             ) {
                 Column(
                     modifier = Modifier
@@ -981,83 +1321,25 @@ private fun PlayerContent(
                         .windowInsetsPadding(WindowInsets.safeDrawing)
                         .padding(horizontal = 24.dp, vertical = 12.dp),
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onBack) {
-                            Icon(
-                                imageVector = Icons.Filled.ArrowBack,
-                                contentDescription = "Назад",
-                                tint = Color.White,
-                            )
-                        }
-                        Spacer(Modifier.size(8.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            if (channel.isArchive) {
-                                // Видно, что играет не эфир, и можно сразу вернуться в него.
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = "АРХИВ",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = Color(0xFFFFC107),
-                                    )
-                                    Spacer(Modifier.width(12.dp))
-                                    TextButton(onClick = onGoLive) {
-                                        Text(text = "В эфир", color = Color.White)
-                                    }
-                                }
-                            }
-                            Text(
-                                text = channel.title,
-                                style = MaterialTheme.typography.titleLarge,
-                                color = Color.White,
-                            )
-                            channel.programmeTitle?.let { programme ->
-                                Text(
-                                    text = programme,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = Color.White.copy(alpha = 0.85f),
-                                )
-                            }
-                        }
-                        IconButton(onClick = { onOpenProgramme(channel.channelId) }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.List,
-                                contentDescription = "Программа канала",
-                                tint = Color.White,
-                            )
-                        }
-                        IconButton(onClick = onToggleFavorite) {
-                            Icon(
-                                imageVector = if (channel.channelId.value in favorites) {
-                                    Icons.Filled.Favorite
-                                } else {
-                                    Icons.Filled.FavoriteBorder
-                                },
-                                contentDescription = "Избранное",
-                                tint = Color.White,
-                            )
-                        }
-                        IconButton(onClick = { recentsVisible = true }) {
-                            Icon(
-                                imageVector = Icons.Filled.DateRange,
-                                contentDescription = "Недавние каналы",
-                                tint = Color.White,
-                            )
-                        }
-                        // Режим кадра: иконка меняется по кругу «вписать → растянуть → обрезать → 1:1».
-                        IconButton(onClick = onCycleAspect) {
-                            Icon(
-                                imageVector = AspectIcons.of(aspectMode),
-                                contentDescription = AspectModes.label(aspectMode),
-                                tint = Color.White,
-                            )
-                        }
-                        Spacer(Modifier.size(12.dp))
-                        Text(
-                            text = clock,
-                            style = MaterialTheme.typography.titleLarge,
-                            color = Color.White,
-                        )
-                    }
+                    PlayerOsdTop(
+                        channelTitle = channel.title,
+                        programmeTitle = channel.programmeTitle,
+                        isArchive = channel.isArchive,
+                        clock = clock,
+                        favorite = channel.channelId.value in favorites,
+                        aspectIcon = AspectIcons.of(aspectMode),
+                        aspectLabel = AspectModes.label(aspectMode),
+                        onBack = onBack,
+                        onGoLive = onGoLive,
+                        // Кнопка «Программа» в OSD открывает панель поверх видео (а не экран).
+                        onOpenProgramme = {
+                            controls.hideOsd()
+                            programmeVisible = true
+                        },
+                        onToggleFavorite = onToggleFavorite,
+                        onOpenRecents = { recentsVisible = true },
+                        onCycleAspect = onCycleAspect,
+                    )
 
                     Spacer(Modifier.weight(1f))
 
@@ -1166,51 +1448,34 @@ private fun PlayerContent(
                         horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        IconButton(onClick = { seekBy(player, -SEEK_STEP_MS) }) {
-                            Icon(
-                                imageVector = Icons.Filled.Replay10,
-                                contentDescription = "Назад на 10 секунд",
-                                tint = Color.White,
-                            )
-                        }
+                        // Нижние кнопки — тот же OsdCircleButton, что и в верхней панели:
+                        // у стандартных IconButton наше оформление фокуса не работало.
+                        OsdCircleButton(
+                            icon = Icons.Filled.Replay10,
+                            contentDescription = "Назад на 10 секунд",
+                            onClick = { seekBy(player, -SEEK_STEP_MS) },
+                        )
 
-                        FilledIconButton(
+                        OsdCircleButton(
+                            icon = if (controlsState.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            contentDescription = if (controlsState.playing) "Пауза" else "Играть",
                             onClick = { togglePlayback(player, controls) },
-                            modifier = Modifier.size(PLAY_BUTTON_SIZE),
-                            colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = Color.White,
-                                contentColor = Color.Black,
-                            ),
-                        ) {
-                            Icon(
-                                imageVector = if (controlsState.playing) {
-                                    Icons.Filled.Pause
-                                } else {
-                                    Icons.Filled.PlayArrow
-                                },
-                                contentDescription = if (controlsState.playing) "Пауза" else "Играть",
-                            )
-                        }
+                            // Фокус при открытии OSD — на этой кнопке.
+                            focusRequester = osdFirstFocus,
+                            size = PLAY_BUTTON_SIZE,
+                        )
 
-                        IconButton(onClick = { seekBy(player, SEEK_STEP_MS) }) {
-                            Icon(
-                                imageVector = Icons.Filled.Forward10,
-                                contentDescription = "Вперёд на 10 секунд",
-                                tint = Color.White,
-                            )
-                        }
+                        OsdCircleButton(
+                            icon = Icons.Filled.Forward10,
+                            contentDescription = "Вперёд на 10 секунд",
+                            onClick = { seekBy(player, SEEK_STEP_MS) },
+                        )
 
-                        IconButton(onClick = { toggleSound(player, controls) }) {
-                            Icon(
-                                imageVector = if (controlsState.muted) {
-                                    Icons.Filled.VolumeOff
-                                } else {
-                                    Icons.Filled.VolumeUp
-                                },
-                                contentDescription = if (controlsState.muted) "Включить звук" else "Выключить звук",
-                                tint = Color.White,
-                            )
-                        }
+                        OsdCircleButton(
+                            icon = if (controlsState.muted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp,
+                            contentDescription = if (controlsState.muted) "Включить звук" else "Выключить звук",
+                            onClick = { toggleSound(player, controls) },
+                        )
                     }
 
                     if (stats.isNotBlank()) {
@@ -1271,6 +1536,8 @@ private fun ProgrammeSeekBar(
     modifier: Modifier = Modifier,
 ) {
     var widthPx by remember { mutableStateOf(1f) }
+    // Фокус на полосе: без явного оформления с пульта не видно, что перемотка «в руках».
+    var focused by remember { mutableStateOf(false) }
 
     // Вся высота блока — зона касания пальцем; сама полоса тонкая и рисуется по центру.
     Box(
@@ -1279,6 +1546,7 @@ private fun ProgrammeSeekBar(
             .height(SEEK_BAR_TOUCH_HEIGHT)
             .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
             // Пульт: полоса получает фокус, влево/вправо перематывают на шаг.
+            .onFocusChanged { focused = it.isFocused }
             .focusable()
             .onKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
@@ -1311,31 +1579,49 @@ private fun ProgrammeSeekBar(
             },
         contentAlignment = Alignment.Center,
     ) {
-        // Дорожка: тонкая, но по всей ширине.
+        // Дорожка: тонкая, но по всей ширине. В фокусе она акцентная и выше — видно издалека.
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(SEEK_BAR_HEIGHT)
-                .clip(RoundedCornerShape(3.dp))
-                .background(Color.White.copy(alpha = 0.35f)),
+                .height(if (focused) SEEK_BAR_FOCUSED_HEIGHT else SEEK_BAR_HEIGHT)
+                .clip(RoundedCornerShape(4.dp))
+                .background(
+                    if (focused) {
+                        TvColors.accent.copy(alpha = 0.45f)
+                    } else {
+                        Color.White.copy(alpha = 0.35f)
+                    },
+                )
+                .then(if (focused) Modifier.border(2.dp, TvColors.focusOutline, RoundedCornerShape(4.dp)) else Modifier),
         )
         // Заполненная часть.
         Box(
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .fillMaxWidth(fraction)
-                .height(SEEK_BAR_HEIGHT)
-                .clip(RoundedCornerShape(3.dp))
-                .background(Color.White),
+                .height(if (focused) SEEK_BAR_FOCUSED_HEIGHT else SEEK_BAR_HEIGHT)
+                .clip(RoundedCornerShape(4.dp))
+                .background(if (focused) TvColors.accent else Color.White),
         )
         // Кружок текущего момента: за него тянут полосу, как в плеерах на телефоне.
         Box(
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .offset { IntOffset((fraction * widthPx - THUMB_SIZE.toPx() / 2f).toInt(), 0) }
-                .size(THUMB_SIZE)
+                .offset {
+                    val size = if (focused) THUMB_FOCUSED_SIZE else THUMB_SIZE
+                    IntOffset((fraction * widthPx - size.toPx() / 2f).toInt(), 0)
+                }
+                .size(if (focused) THUMB_FOCUSED_SIZE else THUMB_SIZE)
                 .clip(CircleShape)
-                .background(Color.White),
+                .background(if (focused) TvColors.accent else Color.White)
+                // Светлая обводка: кружок должен читаться и на светлом кадре.
+                .then(
+                    if (focused) {
+                        Modifier.border(2.dp, Color.White, CircleShape)
+                    } else {
+                        Modifier
+                    },
+                ),
         )
     }
 }
@@ -1353,6 +1639,7 @@ private fun ProgrammeSeekBar(
  * @param fallback что показать, пока видео не готово.
  */
 @Composable
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 fun LivePreview(
     url: String,
     bufferSeconds: Int,
@@ -1429,7 +1716,10 @@ fun LivePreview(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
-                PlayerView(viewContext).apply {
+                // TextureView: SurfaceView в Compose на этом устройстве не получает кадр
+                // до касания экрана, и картинка теряется при пересоздании вьюхи.
+                (android.view.LayoutInflater.from(viewContext)
+                    .inflate(R.layout.player_surface, null) as PlayerView).apply {
                     useController = false
                     this.player = player
                 }
@@ -1445,6 +1735,7 @@ fun LivePreview(
  * @param url адрес потока;
  * @param buffer параметры буфера из настроек.
  */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 private fun buildPlayer(
     context: android.content.Context,
     url: String,
@@ -1508,6 +1799,7 @@ private fun buildPlayer(
 }
 
 /** Переключает паузу и сообщает логике OSD новое намерение. */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 private fun togglePlayback(player: ExoPlayer, controls: PlayerControls) {
     val playing = !controls.state.value.playing
     if (playing) player.play() else player.pause()
@@ -1515,6 +1807,7 @@ private fun togglePlayback(player: ExoPlayer, controls: PlayerControls) {
 }
 
 /** Переключает звук и сообщает логике OSD новое состояние. */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 private fun toggleSound(player: ExoPlayer, controls: PlayerControls) {
     val muted = !controls.state.value.muted
     player.volume = if (muted) 0f else 1f
@@ -1553,6 +1846,7 @@ private fun ImmersiveMode() {
 }
 
 /** Перематывает поток на заданное смещение в пределах буфера и длительности. */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 private fun seekBy(player: ExoPlayer, offsetMs: Long) {
     val target = (player.currentPosition + offsetMs).coerceAtLeast(0L)
     player.seekTo(target)
@@ -1560,12 +1854,13 @@ private fun seekBy(player: ExoPlayer, offsetMs: Long) {
 
 /** Состояние и таймер OSD, живущие вместе с экраном плеера. */
 @Composable
-private fun rememberPlayerControls(): PlayerControls {
+private fun rememberPlayerControls(hideSeconds: Int): PlayerControls {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
-    return remember(scope) { PlayerControls(scope = scope, hideDelay = OSD_HIDE_DELAY) }
+    // Время показа меню приходит из настроек: 4, 8, 15 или 30 секунд.
+    return remember(scope, hideSeconds) {
+        PlayerControls(scope = scope, hideDelay = hideSeconds.seconds)
+    }
 }
-
-private val OSD_HIDE_DELAY = 4.seconds
 
 /** Порог вертикального свайпа по видео: короче — считается случайным касанием. */
 private val SWIPE_THRESHOLD = 60.dp
@@ -1588,6 +1883,9 @@ private val SEEK_BAR_TOUCH_HEIGHT = 48.dp
 
 private val SEEK_BAR_HEIGHT = 6.dp
 
+/** Высота дорожки в фокусе: по ней видно, что перемотка доступна с пульта. */
+private val SEEK_BAR_FOCUSED_HEIGHT = 12.dp
+
 /** Сколько секунд назад ещё считается «живым» эфиром без архива. */
 private const val LIVE_WINDOW_SECONDS = 60L
 
@@ -1600,6 +1898,9 @@ private const val LONG_BACK_PRESS_MS = 600L
 /** Как часто проверяем поведение прямого потока. */
 /** Диаметр кружка-ползунка на полосе прогресса. */
 private val THUMB_SIZE = 18.dp
+
+/** Кружок в фокусе крупнее и акцентный — видно, где перемотка. */
+private val THUMB_FOCUSED_SIZE = 26.dp
 
 /** Сколько ждём первый сегмент архива, прежде чем сказать, что его нет. */
 private const val ARCHIVE_START_TIMEOUT_MS = 25_000L
@@ -1659,6 +1960,7 @@ private fun currentClockText(): String =
  *
  * Масштаб кадра считается [AspectTransform] — по тем же режимам, что были у `PlayerView`.
  */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 private class VideoSurfaceView(context: android.content.Context) : TextureView(context) {
 
     private var boundPlayer: ExoPlayer? = null
@@ -1671,8 +1973,23 @@ private class VideoSurfaceView(context: android.content.Context) : TextureView(c
         target.setVideoTextureView(this)
     }
 
+    private var lastMode: AspectMode = AspectMode.FIT
+    private var lastWidth: Int = 0
+    private var lastHeight: Int = 0
+
+    /** Пересчитывает масштаб после изменения размера поверхности. */
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (w > 0 && h > 0 && lastWidth > 0 && lastHeight > 0) {
+            applyAspect(lastMode, VideoSize(lastWidth, lastHeight))
+        }
+    }
+
     /** Применяет режим кадра (вписать, растянуть, обрезать, 1:1). */
     fun applyAspect(mode: AspectMode, size: VideoSize) {
+        lastMode = mode
+        lastWidth = size.width
+        lastHeight = size.height
         val (scaleX, scaleY) = AspectTransform.scale(
             mode = mode,
             videoWidth = size.width,

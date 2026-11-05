@@ -1,11 +1,14 @@
 package com.mops1k.smotrishka.tv.ui.player
 
 import androidx.lifecycle.SavedStateHandle
+import com.mops1k.smotrishka.tv.ui.home.ProgrammeRowUi
+import com.mops1k.smotrishka.tv.ui.home.ProgrammeRows
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import android.net.Uri
 import com.mops1k.smotrishka.tv.core.data.AudioLanguage
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
+import com.mops1k.smotrishka.tv.core.data.ChannelEpgStore
 import com.mops1k.smotrishka.tv.core.data.EpgStore
 import com.mops1k.smotrishka.tv.core.data.FavoritesStore
 import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
@@ -26,6 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.Clock
@@ -51,6 +55,7 @@ class PlayerViewModel @Inject constructor(
     private val catalogStore: CatalogStore,
     private val epgStore: EpgStore,
     private val epgMatcher: EpgMatcher,
+    private val channelEpgStore: ChannelEpgStore,
     private val settingsStore: PlayerSettingsStore,
     private val recentChannels: RecentChannelsStore,
     private val favoritesStore: FavoritesStore,
@@ -74,6 +79,13 @@ class PlayerViewModel @Inject constructor(
 
     /** Сколько секунд вперёд держать в буфере (настройка из экрана настроек). */
     val bufferSeconds: StateFlow<Int> = _bufferSeconds.asStateFlow()
+
+    /** Сколько секунд меню плеера остаётся на экране (настраивается). */
+    val osdHideSeconds: StateFlow<Int> = settingsStore.osdHideSeconds.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+        initialValue = PlayerSettingsStore.DEFAULT_OSD_HIDE_SECONDS,
+    )
 
     /** Потолок качества видео. */
     /** Избранные каналы. */
@@ -112,15 +124,83 @@ class PlayerViewModel @Inject constructor(
     val channelsInScope: Flow<List<ChannelRef>> = flow {
         val category = settingsStore.lastCategory.first()
         val favoriteIds = favoritesStore.channels.first()
-        emit(
-            ChannelListScope.resolve(
-                channels = catalogStore.playlist().channels,
-                category = category,
-                favoriteIds = favoriteIds,
-                allCategory = PlayerSettingsStore.ALL_CATEGORY,
-                favoritesCategory = FAVORITES_CATEGORY,
-            ),
+        val catalog = catalogStore.playlist().channels
+        val scope = ChannelListScope.resolve(
+            channels = catalog,
+            category = category,
+            favoriteIds = favoriteIds,
+            allCategory = PlayerSettingsStore.ALL_CATEGORY,
+            favoritesCategory = FAVORITES_CATEGORY,
         )
+        // Сразу отдаём список с названиями: панель открывается мгновенно, а передачи
+        // и иконки приходят следом (раньше на первом открытии список был пустым).
+        emit(scope)
+        emit(withProgrammes(scope, catalog))
+    }
+
+    /**
+     * Дополняет каналы названием текущей передачи.
+     *
+     * Один запрос на весь список: гида по каналу в отдельности — сотни обращений, и список
+     * в OSD открывался бы секундами.
+     */
+    /**
+     * Логотипы каналов по идентификаторам.
+     *
+     * У каталога провайдера адресов иконок часто нет, а в гиде они есть: берём иконку гида
+     * по сохранённой связи каналов. Читаются только нужные иконки.
+     */
+    private suspend fun logoUrls(channels: List<Channel>): Map<String, String> {
+        val withoutLogo = channels.filter { it.logoUrl.isNullOrBlank() }
+        if (withoutLogo.isEmpty()) return emptyMap()
+        val links = runCatching { channelEpgStore.links() }.getOrDefault(emptyMap())
+        val epgIds = withoutLogo.mapNotNull { links[it.id] }.toSet()
+        val icons = runCatching { epgStore.icons(epgIds) }.getOrDefault(emptyMap())
+        return withoutLogo.mapNotNull { channel ->
+            links[channel.id]?.let { icons[it] }?.let { channel.id.value to it }
+        }.toMap()
+    }
+
+    private suspend fun withProgrammes(
+        scope: List<ChannelRef>,
+        catalog: List<Channel>,
+    ): List<ChannelRef> {
+        val titles = programmeTitles(catalog)
+        val logos = logoUrls(catalog)
+        return scope.map { ref -> ref.copy(programmeTitle = titles[ref.id], logoUrl = logos[ref.id]) }
+    }
+
+    /**
+     * Названия текущих передач по идентификаторам каналов.
+     *
+     * Один запрос к гиду на весь набор: по одному запросу на канал список открывался бы
+     * секундами, а на панели недавних — тем более.
+     */
+    private suspend fun programmeTitles(channels: List<Channel>): Map<String, String?> {
+        if (channels.isEmpty()) return emptyMap()
+        val now = clock.instant()
+        // Сохранённые связи каналов с гидом: сопоставление по названиям (чтение всей
+        // таблицы гида) выполняем только если связей ещё нет.
+        val saved = runCatching { channelEpgStore.links() }.getOrDefault(emptyMap())
+        val matches = if (saved.isNotEmpty()) {
+            // Если для канала связи нет, берём epgId из самого каталога.
+            channels.mapNotNull { channel ->
+                (saved[channel.id] ?: channel.epgId)?.let { channel.id to it }
+            }.toMap()
+        } else {
+            epgMatcher.match(channels, epgStore.epgChannels()).matches
+        }
+        val programmes = epgStore.programmesByChannel(
+            from = now.minus(6, ChronoUnit.HOURS),
+            to = now.plus(2, ChronoUnit.HOURS),
+        )
+        return channels.associate { channel ->
+            val epgId = matches[channel.id]
+            channel.id.value to epgId
+                ?.let { programmes[it] }
+                ?.firstOrNull { !it.start.isAfter(now) && it.end.isAfter(now) }
+                ?.title
+        }
     }
 
     /** Соседние каналы по алфавиту: (предыдущий, следующий). */
@@ -135,13 +215,107 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Телепрограмма текущего канала для OSD-панели.
+     *
+     * Считается прямо в плеере: панель открывается поверх видео и не должна уводить
+     * на отдельный экран (указание Александра 05.11.2026).
+     */
+    val schedule: Flow<List<ProgrammeRowUi>> = flow {
+        val channel = catalogStore.playlist().channels
+            .firstOrNull { it.id.value == channelId }
+        android.util.Log.d(
+            "SmotrishkaGuide",
+            "старт: channelId=$channelId найден=${channel != null} имя='${channel?.name.orEmpty()}'",
+        )
+        if (channel == null) {
+            emit(emptyList())
+            return@flow
+        }
+        val now = clock.instant()
+        val links = runCatching { channelEpgStore.links() }.getOrDefault(emptyMap())
+        val epgId = links[channel.id] ?: channel.epgId
+        android.util.Log.d(
+            "SmotrishkaGuide",
+            "канал='${channel.name}' связей=${links.size} epgId=${epgId ?: "нет"} " +
+                "epgId каталога='${channel.epgId ?: "нет"}'",
+        )
+        val resolved = epgId ?: currentEpgId(channel)
+        if (resolved == null) {
+            emit(emptyList())
+            return@flow
+        }
+        val programmes = epgStore.programmes(
+            channelId = resolved,
+            from = now.minus(6, ChronoUnit.HOURS),
+            to = now.plus(6, ChronoUnit.HOURS),
+        )
+        // Ручной сдвиг гида этого канала: у части каналов провайдер отдаёт сетку со смещением.
+        val shiftSeconds = (settingsStore.epgShifts.first()[channel.id.value] ?: 0).toLong() * 3600L
+        val shifted = if (shiftSeconds == 0L) {
+            programmes
+        } else {
+            programmes.map {
+                it.copy(start = it.start.plusSeconds(shiftSeconds), end = it.end.plusSeconds(shiftSeconds))
+            }
+        }
+        // Диагностика: видно, с каким каналом гида сопоставлен канал и что считается текущим.
+        logGuideMatch(channel, resolved, programmes)
+        emit(
+            ProgrammeRows.build(
+                programmes = shifted,
+                now = now,
+                channelHasArchive = channel.archive != null,
+            ),
+        )
+    }
+
+    /**
+     * Диагностика сопоставления канала с гидом.
+     *
+     * Пишет в журнал, с каким каналом гида сопоставлен канал каталога и какая передача
+     * считается текущей. Нужно, чтобы отличить чужую сетку передач от сдвига времени.
+     */
+    private suspend fun logGuideMatch(channel: Channel, epgId: String, programmes: List<Programme>) {
+        val epgName = runCatching {
+            epgStore.epgChannels().firstOrNull { it.id == epgId }?.displayName
+        }.getOrNull()
+        val current = programmes.firstOrNull { !it.start.isAfter(clock.instant()) && it.end.isAfter(clock.instant()) }
+        android.util.Log.d(
+            "SmotrishkaGuide",
+            "канал='${channel.name}' epgId=$epgId гид='${epgName.orEmpty()}' " +
+                "текущая='${current?.title.orEmpty()}' " +
+                "начало=${current?.start} конец=${current?.end} сейчас=${clock.instant()}",
+        )
+    }
+
+    /** Идентификатор канала в гиде: через сохранённые связи, иначе через сопоставление. */
+    private suspend fun currentEpgId(channel: Channel): String? =
+        channelEpgStore.links()[channel.id]
+            ?: epgMatcher.match(listOf(channel), epgStore.epgChannels()).matches[channel.id]
+
     /** Режим кадра. */
     val aspectMode: Flow<AspectMode> = settingsStore.aspectMode
 
-    /** Недавние каналы: пары «id — название», свежие первыми. */
-    val recents: Flow<List<Pair<String, String>>> = recentChannels.channels.map { ids ->
-        val names = catalogStore.playlist().channels.associate { it.id.value to it.name }
-        ids.mapNotNull { id -> names[id]?.let { id to it } }
+    /** Недавние каналы: свежие первыми, с названием текущей передачи, как в списке каналов. */
+    val recents: Flow<List<RecentChannelRef>> = recentChannels.channels.transform { ids ->
+        val catalog = catalogStore.playlist().channels
+        val byId = catalog.associateBy { it.id.value }
+        val items = ids.mapNotNull { id -> byId[id] }
+        // Сначала только названия: панель не должна ждать гид.
+        emit(items.map { RecentChannelRef(id = it.id.value, name = it.name) })
+        val titles = programmeTitles(items)
+        val logos = logoUrls(items)
+        emit(
+            items.map { channel ->
+                RecentChannelRef(
+                    id = channel.id.value,
+                    name = channel.name,
+                    logoUrl = channel.logoUrl?.takeIf { it.isNotBlank() } ?: logos[channel.id.value],
+                    programmeTitle = titles[channel.id.value],
+                )
+            },
+        )
     }
 
     /** Переключает режим кадра по кругу и запоминает выбор. */

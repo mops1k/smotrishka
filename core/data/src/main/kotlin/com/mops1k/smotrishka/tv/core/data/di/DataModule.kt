@@ -8,10 +8,13 @@ import androidx.room.Room
 import androidx.work.WorkManager
 import com.mops1k.smotrishka.tv.core.data.AesGcmSecretCipher
 import com.mops1k.smotrishka.tv.core.data.CatalogDao
+import com.mops1k.smotrishka.tv.core.data.ChannelEpgDao
 import com.mops1k.smotrishka.tv.core.data.CatalogMapper
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
 import com.mops1k.smotrishka.tv.core.data.CatalogUpdater
 import com.mops1k.smotrishka.tv.core.data.DatabaseMigrations
+import com.mops1k.smotrishka.tv.core.data.SearchDao
+import com.mops1k.smotrishka.tv.core.data.SearchRepository
 import com.mops1k.smotrishka.tv.core.data.EpgDao
 import com.mops1k.smotrishka.tv.core.data.EpgGuideDao
 import com.mops1k.smotrishka.tv.core.data.EpgGuideRepository
@@ -66,6 +69,9 @@ object DataModule {
     private const val HTTP_CACHE_SECONDS = 60
 
     @Provides
+    fun provideChannelEpgDao(database: SmotrishkaDatabase): ChannelEpgDao = database.channelEpgDao()
+
+    @Provides
     @Singleton
     fun okHttpClient(@ApplicationContext context: Context): OkHttpClient =
         OkHttpClient.Builder()
@@ -90,7 +96,12 @@ object DataModule {
     @Singleton
     fun database(@ApplicationContext context: Context): SmotrishkaDatabase =
         Room.databaseBuilder(context, SmotrishkaDatabase::class.java, DB_NAME)
-            .addMigrations(DatabaseMigrations.MIGRATION_1_2)
+            .addMigrations(
+                DatabaseMigrations.MIGRATION_1_2,
+                DatabaseMigrations.MIGRATION_2_3,
+                DatabaseMigrations.MIGRATION_3_4,
+                DatabaseMigrations.MIGRATION_4_5,
+            )
             .build()
 
     @Provides
@@ -101,6 +112,16 @@ object DataModule {
 
     @Provides
     fun epgGuideDao(database: SmotrishkaDatabase): EpgGuideDao = database.epgGuideDao()
+
+    @Provides
+    fun searchDao(database: SmotrishkaDatabase): SearchDao = database.searchDao()
+
+    @Provides
+    fun searchRepository(
+        catalogDao: CatalogDao,
+        epgDao: EpgDao,
+        searchDao: SearchDao,
+    ): SearchRepository = SearchRepository(catalogDao, epgDao, searchDao)
 
     @Provides
     @Singleton

@@ -93,6 +93,9 @@ private class StreamingHandler(
     private var description: String? = null
     private var iconUrl: String? = null
 
+    /** Иконка канала: в потоковом гиде `<icon src>` встречается и внутри `<channel>`. */
+    private var channelIconUrl: String? = null
+
     private val text = StringBuilder()
 
     var total: Int = 0
@@ -104,6 +107,7 @@ private class StreamingHandler(
             "channel" -> {
                 channelId = attributes?.getValue("id")
                 displayName = null
+                channelIconUrl = null
             }
 
             "programme" -> {
@@ -116,7 +120,15 @@ private class StreamingHandler(
                 iconUrl = null
             }
 
-            "icon" -> if (programmeChannelId != null) iconUrl = attributes?.getValue("src")
+            "icon" -> {
+                val src = attributes?.getValue("src")
+                if (programmeChannelId != null) {
+                    iconUrl = src
+                } else if (channelId != null) {
+                    // Иконка канала: раньше терялась, из-за чего в списках были только буквы.
+                    channelIconUrl = src
+                }
+            }
         }
     }
 
@@ -134,9 +146,11 @@ private class StreamingHandler(
                 pendingChannels += EpgChannel(
                     id = channelId.orEmpty(),
                     displayName = displayName ?: channelId.orEmpty(),
+                    iconUrl = channelIconUrl,
                 )
                 channelId = null
                 displayName = null
+                channelIconUrl = null
             }
 
             "title" -> if (programmeChannelId != null) title = text.toString().trim().takeIf { it.isNotEmpty() }

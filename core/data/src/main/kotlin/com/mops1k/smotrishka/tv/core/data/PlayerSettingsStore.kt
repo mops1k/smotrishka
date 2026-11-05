@@ -28,6 +28,48 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
         preferences[BUFFER_KEY] ?: DEFAULT_BUFFER_SECONDS
     }
 
+    /**
+     * Сколько секунд меню плеера (OSD) остаётся на экране без действий.
+     *
+     * Настраивается: на пульте кому-то нужно 4 секунды, чтобы быстро убрать меню, а кому-то
+     * 30 — чтобы прочитать программу (просьба Александра 06.11.2026).
+     */
+    val osdHideSeconds: Flow<Int> = dataStore.data.map { preferences ->
+        preferences[OSD_HIDE_KEY] ?: DEFAULT_OSD_HIDE_SECONDS
+    }
+
+    /**
+     * Сдвиг времени гида по каналам, в часах.
+     *
+     * У части каналов провайдер отдаёт сетку со смещением (например, время без зоны),
+     * поэтому сдвиг задаётся отдельно для канала, а не глобально.
+     */
+    val epgShifts: Flow<Map<String, Int>> = dataStore.data.map { preferences ->
+        preferences[EPG_SHIFTS_KEY].orEmpty()
+            .mapNotNull { entry ->
+                val parts = entry.split('=')
+                if (parts.size == 2) parts[0] to (parts[1].toIntOrNull() ?: 0) else null
+            }
+            .filter { it.second != 0 }
+            .toMap()
+    }
+
+    /**
+     * Задаёт сдвиг гида для одного канала.
+     *
+     * @param channelId канал каталога;
+     * @param hours сдвиг в часах, допустимо −12…+12 (0 — убрать сдвиг).
+     */
+    suspend fun setEpgShift(channelId: String, hours: Int) {
+        val value = hours.coerceIn(-MAX_EPG_SHIFT_HOURS, MAX_EPG_SHIFT_HOURS)
+        dataStore.edit { preferences ->
+            val current = preferences[EPG_SHIFTS_KEY].orEmpty().toMutableSet()
+            current.removeAll { it.substringBefore('=') == channelId }
+            if (value != 0) current.add("$channelId=$value")
+            preferences[EPG_SHIFTS_KEY] = current
+        }
+    }
+
     /** Потолок качества видео. */
     val videoQuality: Flow<VideoQuality> = dataStore.data.map { preferences ->
         preferences[QUALITY_KEY]?.let { name -> VideoQuality.entries.firstOrNull { it.name == name } }
@@ -142,6 +184,20 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
         dataStore.edit { preferences ->
             preferences[BUFFER_KEY] = seconds.coerceIn(MIN_BUFFER_SECONDS, MAX_BUFFER_SECONDS)
         }
+    }
+
+    /**
+     * Сохраняет время показа меню плеера.
+     *
+     * @param seconds значение из [OSD_HIDE_CHOICES]; иначе берётся ближайшее допустимое.
+     */
+    suspend fun setOsdHideSeconds(seconds: Int) {
+        val value = if (seconds in OSD_HIDE_CHOICES) {
+            seconds
+        } else {
+            OSD_HIDE_CHOICES.minBy { kotlin.math.abs(it - seconds) }
+        }
+        dataStore.edit { preferences -> preferences[OSD_HIDE_KEY] = value }
     }
 
     /**
@@ -267,6 +323,15 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
 
         const val DEFAULT_EPG_WINDOW_HOURS = 24
 
+        /** Сколько секунд меню плеера показывается по умолчанию. */
+        const val DEFAULT_OSD_HIDE_SECONDS = 4
+
+        /** Варианты времени показа меню плеера: от быстрого до «прочитать программу». */
+        val OSD_HIDE_CHOICES = listOf(4, 8, 15, 30)
+
+        /** Предел ручного сдвига гида для канала, часы. */
+        const val MAX_EPG_SHIFT_HOURS = 12
+
         /**
          * Варианты окна программы передач (часы назад).
          *
@@ -282,6 +347,8 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
         val ARCHIVE_DEPTH_CHOICES = listOf(24, 48, 72, 96, 120, 144, 168)
 
         private val BUFFER_KEY = intPreferencesKey("player_buffer_seconds")
+        private val OSD_HIDE_KEY = intPreferencesKey("player_osd_hide_seconds")
+        private val EPG_SHIFTS_KEY = stringSetPreferencesKey("epg_shifts_by_channel")
         private val QUALITY_KEY = stringPreferencesKey("player_video_quality")
         private val RETRY_KEY = intPreferencesKey("player_retry_attempts")
         private val EPG_WINDOW_KEY = intPreferencesKey("epg_window_hours")

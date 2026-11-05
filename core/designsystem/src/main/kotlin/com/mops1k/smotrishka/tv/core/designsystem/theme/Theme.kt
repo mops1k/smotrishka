@@ -6,33 +6,45 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
 /**
- * Тёмная палитра приложения: рассчитана на просмотр с дивана при слабом свете.
- * Акцент — зелёный, как в баннере и иконке.
+ * Тёмная схема Material3 в палитре редизайна.
+ *
+ * Акцент — фиолетовый `#a987ff` (был зелёный `#3BA55D`): по `docs/design/tokens.md` зелёный
+ * остаётся только точкой «в эфире» и успехом в тосте.
  */
 private val TvDarkColors = darkColorScheme(
-    primary = Color(0xFF3BA55D),
-    onPrimary = Color(0xFF06210F),
-    primaryContainer = Color(0xFF1C4F31),
-    onPrimaryContainer = Color(0xFFB8F2CC),
-    secondary = Color(0xFF7AA2C8),
-    onSecondary = Color(0xFF0A1B2A),
-    background = Color(0xFF0E1116),
-    onBackground = Color(0xFFE6EBF2),
-    surface = Color(0xFF151B23),
-    onSurface = Color(0xFFE6EBF2),
-    surfaceVariant = Color(0xFF243040),
-    onSurfaceVariant = Color(0xFFAFBCCB),
-    error = Color(0xFFE4695C),
-    onError = Color(0xFF2B0A07),
+    primary = TvColors.accent,
+    onPrimary = TvColors.categoryActiveText,
+    primaryContainer = TvColors.panelSoft,
+    onPrimaryContainer = TvColors.text,
+    secondary = TvColors.accentStrong,
+    onSecondary = TvColors.text,
+    tertiary = TvColors.green,
+    onTertiary = TvColors.categoryActiveText,
+    background = TvColors.bg,
+    onBackground = TvColors.text,
+    surface = TvColors.panel,
+    onSurface = TvColors.text,
+    surfaceVariant = TvColors.panelSoft,
+    onSurfaceVariant = TvColors.muted,
+    outline = TvColors.line,
+    outlineVariant = TvColors.line,
+    error = TvColors.favorite,
+    onError = Color(0xFF2B0A0F),
+    errorContainer = Color(0xFF2A1B21),
+    onErrorContainer = TvColors.errorText,
+    scrim = TvColors.scrim,
 )
 
 /**
- * Тема приложения: единый стиль для экранов онбординга, каналов и плеера.
+ * Тема приложения: единый стиль для онбординга, каркаса, списка каналов, настроек и плеера.
+ *
+ * @param content содержимое приложения.
  */
 @Composable
 fun SmotrishkaTvTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = TvDarkColors,
+        typography = TvMaterialTypography,
         content = content,
     )
 }

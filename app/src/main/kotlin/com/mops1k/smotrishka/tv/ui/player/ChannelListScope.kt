@@ -11,6 +11,10 @@ import com.mops1k.smotrishka.tv.core.model.Channel
 data class ChannelRef(
     val id: String,
     val name: String,
+    // Логотип канала: у каталога провайдера его часто нет, тогда берём иконку из гида.
+    val logoUrl: String? = null,
+    // Передача, которая идёт сейчас: показывается под названием тонким шрифтом.
+    val programmeTitle: String? = null,
 )
 
 /**
@@ -52,3 +56,17 @@ object ChannelListScope {
             .map { ChannelRef(id = it.id.value, name = it.name) }
     }
 }
+
+/**
+ * Недавний канал в панели плеера.
+ *
+ * @param id идентификатор канала в каталоге;
+ * @param name название канала;
+ * @param programmeTitle передача, которая идёт сейчас (если гид её знает).
+ */
+data class RecentChannelRef(
+    val id: String,
+    val name: String,
+    val logoUrl: String? = null,
+    val programmeTitle: String? = null,
+)

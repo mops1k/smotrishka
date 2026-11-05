@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Поверхность видео: TextureView вместо SurfaceView.
+
+  SurfaceView в Compose-иерархии на части устройств не получает кадр до касания экрана,
+  и картинка пропадает при пересоздании вьюхи: звук идёт, экран чёрный. TextureView
+  рисуется в обычной вью-иерархии и такого поведения не даёт.
+-->
+<androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:surface_type="texture_view"
+    app:use_controller="false" />

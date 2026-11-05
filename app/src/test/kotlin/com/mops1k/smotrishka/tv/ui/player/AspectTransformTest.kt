@@ -9,51 +9,68 @@ import org.junit.Test
  *
  * Появилось вместе с переходом с `SurfaceView` на `TextureView`: на ТВ-приставке
  * поверхность `PlayerView` приходила нулевого размера, Media3 отключал видео, и картинки
- * не было вообще. Масштаб теперь считаем сами — значит его надо покрыть тестом, чтобы
- * FIT/CROP/STRETCH не перепутались.
+ * не было вообще.
+ *
+ * `TextureView` сам растягивает буфер кадра на свои границы, поэтому единичный масштаб —
+ * это «растянуть на всю поверхность». Режимы считаются от соотношений сторон: у кадра 16:9
+ * в поверхность 16:9 масштаб обязан быть (1, 1), иначе эфир ужимается в центр (ошибка
+ * 05.11.2026: кадр 853x480 вместо 1280x720 из-за коэффициента 720/1080).
  */
 class AspectTransformTest {
 
     @Test
-    fun `вписать сохраняет пропорции и вписывает по узкой стороне`() {
-        // Кадр 1920x1080 в поверхность 1280x720: вписывается ровно по ширине.
+    fun `вписать при совпадении сторон занимает весь экран`() {
+        // Кадр 1920x1080 в поверхность 1280x720: стороны совпадают, ужимать нечего.
         val (sx, sy) = AspectTransform.scale(AspectMode.FIT, 1920, 1080, 1280, 720)
 
-        assertThat(sx).isWithin(0.001f).of(0.6667f)
-        assertThat(sy).isWithin(0.001f).of(0.6667f)
+        assertThat(sx).isWithin(0.001f).of(1f)
+        assertThat(sy).isWithin(0.001f).of(1f)
     }
 
     @Test
-    fun `обрезать заполняет поверхность по большей стороне`() {
-        // Кадр 1080x1920 (вертикальный) в горизонтальную поверхность: обрезаем по высоте.
+    fun `вписать узкий кадр оставляет полосы по бокам`() {
+        // Кадр 4:3 (1440x1080) в широкую поверхность 16:9: по бокам полосы.
+        val (sx, sy) = AspectTransform.scale(AspectMode.FIT, 1440, 1080, 1280, 720)
+
+        assertThat(sx).isWithin(0.001f).of(0.75f)
+        assertThat(sy).isWithin(0.001f).of(1f)
+    }
+
+    @Test
+    fun `обрезать широкий кадр в узкой поверхности режет верх и низ`() {
+        // Кадр 16:9 в поверхность 4:3 (1024x768): по бокам заполняем, сверху и снизу обрезаем.
+        val (sx, sy) = AspectTransform.scale(AspectMode.CROP, 1920, 1080, 1024, 768)
+
+        assertThat(sx).isWithin(0.001f).of(1.3333f)
+        assertThat(sy).isWithin(0.001f).of(1f)
+    }
+
+    @Test
+    fun `обрезать вертикальный кадр заполняет поверхность по ширине`() {
+        // Кадр 1080x1920 (9:16) в горизонтальную поверхность: обрезаем по высоте.
         val (sx, sy) = AspectTransform.scale(AspectMode.CROP, 1080, 1920, 1280, 720)
 
-        assertThat(sx).isWithin(0.001f).of(1.1852f)
-        assertThat(sy).isWithin(0.001f).of(1.1852f)
+        assertThat(sx).isWithin(0.001f).of(1f)
+        assertThat(sy).isWithin(0.001f).of(3.1605f)
     }
 
     @Test
-    fun `растянуть заполняет обе оси независимо`() {
+    fun `растянуть не масштабирует - TextureView сам заполняет поверхность`() {
         val (sx, sy) = AspectTransform.scale(AspectMode.STRETCH, 1920, 1080, 1280, 720)
-
-        assertThat(sx).isWithin(0.001f).of(0.6667f)
-        assertThat(sy).isWithin(0.001f).of(0.6667f)
-    }
-
-    @Test
-    fun `растянуть не сохраняет пропорции у несовпадающих сторон`() {
-        val (sx, sy) = AspectTransform.scale(AspectMode.STRETCH, 1000, 1000, 1280, 720)
-
-        assertThat(sx).isWithin(0.001f).of(1.28f)
-        assertThat(sy).isWithin(0.001f).of(0.72f)
-    }
-
-    @Test
-    fun `один к одному не масштабирует`() {
-        val (sx, sy) = AspectTransform.scale(AspectMode.ORIGINAL, 1920, 1080, 1280, 720)
 
         assertThat(sx).isEqualTo(1f)
         assertThat(sy).isEqualTo(1f)
+    }
+
+    @Test
+    fun `один к одному выводит пиксель в пиксель`() {
+        // TextureView сам ужимает буфер 1920x1080 в поверхность 1280x720 (коэффициент 0.667),
+        // поэтому для «пиксель в пиксель» нужен обратный множитель 1.5; картинка при этом
+        // выходит за границы экрана, и это ожидаемо для режима 1:1.
+        val (sx, sy) = AspectTransform.scale(AspectMode.ORIGINAL, 1920, 1080, 1280, 720)
+
+        assertThat(sx).isWithin(0.001f).of(1.5f)
+        assertThat(sy).isWithin(0.001f).of(1.5f)
     }
 
     @Test

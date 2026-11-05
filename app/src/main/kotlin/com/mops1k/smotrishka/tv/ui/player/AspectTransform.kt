@@ -31,17 +31,26 @@ object AspectTransform {
         if (videoWidth <= 0 || videoHeight <= 0 || viewWidth <= 0 || viewHeight <= 0) {
             return 1f to 1f
         }
-        val fit = minOf(viewWidth.toFloat() / videoWidth, viewHeight.toFloat() / videoHeight)
-        val cover = maxOf(viewWidth.toFloat() / videoWidth, viewHeight.toFloat() / videoHeight)
+        // `TextureView` сам растягивает буфер кадра на свои границы, поэтому единичный
+        // масштаб означает «на весь экран». Режимы считаем от соотношений сторон, иначе
+        // кадр 16:9 в поверхности 16:9 ужимался в центр (коэффициент 720/1080 = 0.667).
+        val videoAspect = videoWidth.toFloat() / videoHeight
+        val viewAspect = viewWidth.toFloat() / viewHeight
+        // Доля, на которую надо ужать ширину кадра, чтобы он вписался целиком.
+        val fitX = minOf(1f, videoAspect / viewAspect)
+        val fitY = minOf(1f, viewAspect / videoAspect)
+        // Доля, на которую надо увеличить, чтобы заполнить поверхность с обрезкой краёв.
+        val cropX = maxOf(1f, videoAspect / viewAspect)
+        val cropY = maxOf(1f, viewAspect / videoAspect)
         return when (mode) {
             // Вписать: кадр целиком, с полосами.
-            AspectMode.FIT -> fit to fit
-            // Растянуть: заполнить по обеим осям, пропорции не сохраняем.
-            AspectMode.STRETCH -> viewWidth.toFloat() / videoWidth to viewHeight.toFloat() / videoHeight
+            AspectMode.FIT -> fitX to fitY
+            // Растянуть: буфер и так заполняет поверхность, дополнительный масштаб не нужен.
+            AspectMode.STRETCH -> 1f to 1f
             // Обрезать: заполнить с обрезкой краёв, пропорции сохраняем.
-            AspectMode.CROP -> cover to cover
-            // 1:1: пиксель в пиксель, без масштаба.
-            AspectMode.ORIGINAL -> 1f to 1f
+            AspectMode.CROP -> cropX to cropY
+            // 1:1: пиксель кадра в пиксель экрана.
+            AspectMode.ORIGINAL -> videoWidth.toFloat() / viewWidth to videoHeight.toFloat() / viewHeight
         }
     }
 }
