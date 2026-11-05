@@ -8,6 +8,7 @@ import com.mops1k.smotrishka.tv.core.data.FavoritesStore
 import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
 import com.mops1k.smotrishka.tv.core.data.RecentChannelsStore
 import com.mops1k.smotrishka.tv.core.data.SyncStatusStore
+import com.mops1k.smotrishka.tv.core.model.Channel
 import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.core.playlist.EpgMatcher
 import com.mops1k.smotrishka.tv.epg.EpgUpdateState
@@ -19,24 +20,30 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.Clock
 import java.time.temporal.ChronoUnit
 import javax.inject.Inject
 
 /**
- * Главный экран: категории, каналы и «сейчас / далее» из программы передач.
+ * Главный экран: разделы «Телеканалы», «Избранное», «Недавние», категории, список каналов,
+ * карточка выбранного и разворот телепрограммы.
  *
- * Программа подтягивается по сопоставлению каналов с EPG; каналы без сопоставления
- * остаются в списке, но без программы — пользователь видит честную разницу.
+ * Программа подтягивается по сопоставлению каналов с EPG; каналы без сопоставления остаются в
+ * списке, но без программы — пользователь видит честную разницу.
  *
  * @param catalogStore каталог каналов;
  * @param epgStore программа передач;
  * @param epgMatcher сопоставление каналов каталога и EPG;
- * @param clock текущее время (подменяется в тестах).
+ * @param settingsStore настройки (последняя категория, глубина архива);
+ * @param favoritesStore избранные каналы;
+ * @param recentChannels недавно просмотренные каналы;
+ * @param syncStatusStore время последней синхронизации;
+ * @param clock текущее время (подменяется в тестах);
+ * @param epgUpdater фоновая догрузка программы передач.
  */
 @HiltViewModel
 class HomeViewModel @Inject constructor(
@@ -51,9 +58,7 @@ class HomeViewModel @Inject constructor(
     private val epgUpdater: EpgUpdater,
 ) : ViewModel() {
 
-    /**
-     * Фоновая догрузка программы передач: каналы уже доступны, гид приходит позже.
-     */
+    /** Фоновая догрузка программы передач: каналы уже доступны, гид приходит позже. */
     val epgState: StateFlow<EpgUpdateState> = epgUpdater.state
 
     private val _state = MutableStateFlow<HomeUiState>(HomeUiState.Loading)
@@ -75,8 +80,219 @@ class HomeViewModel @Inject constructor(
         initialValue = false,
     )
 
+    /** Текущий раздел. */
+    private var section: HomeSection = HomeSection.TV
+
+    /** Выбранная категория, `null` — «Все каналы». */
     private var selectedCategoryId: String? = null
+
+    /** Строка поиска: фильтр по названию канала. */
+    private var query: String = ""
+
+    /** Развёрнута ли телепрограмма в карточке. */
+    private var programmeOpen: Boolean = false
+
+    /** Каналы последней загрузки: фильтрация идёт из них, без чтения базы. */
+    private var allChannels: List<ChannelUi> = emptyList()
+
+    /** Сопоставление каналов с EPG из последней загрузки. */
+    private var epgMatches: Map<ChannelId, String> = emptyMap()
+
+    /** Избранные каналы. */
+    private var favorites: Set<String> = emptySet()
+
+    /** Недавние каналы: свежие первыми. */
+    private var recent: List<String> = emptyList()
+
+    /** Каналы с нестабильным потоком. */
+    private var unstable: Set<String> = emptySet()
+
+    /** Каналы с проверенным архивом. */
+    private var archiveVerified: Set<String> = emptySet()
+
+    /** Признак, что сохранённые категория и избранное прочитаны. */
+    private val restoreDone = kotlinx.coroutines.CompletableDeferred<Unit>()
+
     private var selectedChannelId: ChannelId? = null
+    private var selectJob: Job? = null
+
+    /** Время последнего обновления данных, которое уже показано на экране. */
+    private var shownSyncAt: Long? = null
+
+    init {
+        // Гид догружается в фоне: как только передачи появились в базе, перестраиваем список,
+        // иначе программа видна только после перезапуска приложения.
+        viewModelScope.launch {
+            epgStore.programmeCount
+                .debounce(2_000)
+                .collect { refresh(force = true) }
+        }
+        viewModelScope.launch {
+            favorites = runCatching { favoritesStore.channels.first() }.getOrDefault(favorites)
+            unstable = runCatching { settingsStore.unstableChannels.first() }.getOrDefault(emptySet())
+            archiveVerified = runCatching { settingsStore.archiveVerified.first() }.getOrDefault(emptySet())
+            launch {
+                settingsStore.archiveVerified.collect { verified ->
+                    archiveVerified = verified
+                    val content = _state.value
+                    if (content is HomeUiState.Content) {
+                        _state.value = content.copy(archiveVerified = verified)
+                    }
+                }
+            }
+            // После возврата из плеера карточка показывает канал, который только что смотрели.
+            recentChannels.channels.first().firstOrNull()?.let { selectedChannelId = ChannelId(it) }
+            val saved = settingsStore.lastCategory.first()
+            if (saved != null && saved.isNotEmpty()) {
+                selectedCategoryId = if (saved == PlayerSettingsStore.ALL_CATEGORY) null else saved
+            }
+            restoreDone.complete(Unit)
+        }
+        viewModelScope.launch {
+            favoritesStore.channels.collect { set ->
+                favorites = set
+                refreshVisible()
+            }
+        }
+        viewModelScope.launch {
+            recentChannels.channels.collect { ids ->
+                recent = ids
+                refreshVisible()
+            }
+        }
+        viewModelScope.launch { shownSyncAt = syncStatusStore.last()?.atMillis }
+        refresh()
+    }
+
+    /**
+     * Переключает раздел.
+     *
+     * Категория при смене раздела сбрасывается на «Все каналы» (`docs/design/flows.md`),
+     * выбранный канал сохраняется: карточка справа не должна прыгать.
+     *
+     * @param newSection выбранный раздел.
+     */
+    fun selectSection(newSection: HomeSection) {
+        if (section == newSection) return
+        section = newSection
+        selectedCategoryId = null
+        programmeOpen = false
+        viewModelScope.launch { settingsStore.setLastCategory(null) }
+        val current = _state.value
+        if (current is HomeUiState.Content && allChannels.isNotEmpty()) {
+            _state.value = current.copy(
+                section = section,
+                selectedCategoryId = null,
+                channels = visibleChannels(),
+                programmeOpen = false,
+                schedule = emptyList(),
+            )
+            return
+        }
+        viewModelScope.launch { _state.value = buildState() }
+    }
+
+    /**
+     * Выбирает категорию.
+     *
+     * @param categoryId ключ категории, `null` — «Все каналы».
+     */
+    fun selectCategory(categoryId: String?) {
+        selectedCategoryId = categoryId
+        viewModelScope.launch { settingsStore.setLastCategory(categoryId) }
+        val current = _state.value
+        if (current is HomeUiState.Content && allChannels.isNotEmpty()) {
+            _state.value = current.copy(
+                selectedCategoryId = categoryId,
+                channels = visibleChannels(),
+            )
+            return
+        }
+        viewModelScope.launch { _state.value = buildState() }
+    }
+
+    /**
+     * Меняет строку поиска.
+     *
+     * Фильтр идёт по уже загруженному списку: у реальных плейлистов тысячи каналов, и обход
+     * базы на каждый введённый символ недопустим.
+     *
+     * @param value новая строка поиска.
+     */
+    fun setQuery(value: String) {
+        query = value
+        refreshVisible()
+    }
+
+    /** Закрывает поиск и сбрасывает фильтр вместе с запросом. */
+    fun closeSearch() {
+        if (query.isEmpty()) return
+        query = ""
+        refreshVisible()
+    }
+
+    /** Разворачивает телепрограмму выбранного канала. */
+    fun openProgramme() {
+        val current = _state.value as? HomeUiState.Content ?: return
+        val channel = current.previewChannel?.channel ?: return
+        programmeOpen = true
+        viewModelScope.launch {
+            val schedule = scheduleFor(channel)
+            val fresh = _state.value
+            if (fresh is HomeUiState.Content) {
+                _state.value = fresh.copy(programmeOpen = true, schedule = schedule)
+            }
+        }
+    }
+
+    /** Сворачивает телепрограмму: карточка возвращается в обычный вид. */
+    fun closeProgramme() {
+        programmeOpen = false
+        val current = _state.value
+        if (current is HomeUiState.Content) {
+            _state.value = current.copy(programmeOpen = false, schedule = emptyList())
+        }
+    }
+
+    /**
+     * Переключает канал в избранном.
+     *
+     * Состояние меняется сразу (оптимистично), а запись в DataStore идёт следом: иначе сердце
+     * нажимается мгновенно, а канал в разделе «Избранное» появляется с задержкой.
+     */
+    fun toggleFavorite(channelId: ChannelId) {
+        val id = channelId.value
+        favorites = if (id in favorites) favorites - id else favorites + id
+        refreshVisible()
+        viewModelScope.launch { favoritesStore.toggle(id) }
+    }
+
+    /**
+     * Выбирает канал для карточки.
+     *
+     * Смена откладывается на несколько сотен миллисекунд: при быстрой прокрутке списка фокус
+     * проскакивает строки, и без задержки карточка дёргалась бы на каждом канале.
+     *
+     * @param channelId ключ канала.
+     */
+    fun selectChannel(channelId: ChannelId) {
+        selectJob?.cancel()
+        selectJob = viewModelScope.launch {
+            delay(SELECT_DEBOUNCE_MS)
+            selectedChannelId = channelId
+            val current = _state.value
+            if (current is HomeUiState.Content) {
+                val preview = current.previewChannel
+                    ?.takeIf { it.channel.id == channelId }
+                    ?: allChannels.firstOrNull { it.channel.id == channelId }
+                _state.value = current.copy(
+                    selectedChannelId = channelId,
+                    previewChannel = preview,
+                )
+            }
+        }
+    }
+
     /**
      * Обновляет время на экране.
      *
@@ -94,142 +310,27 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private var showChannels: Boolean = false
-
-    /** Каналы со программой из последней загрузки: категория фильтруется из них, без чтения базы. */
-    private var allChannels: List<ChannelUi> = emptyList()
-
-    /** Признак, что сохранённая категория и избранное прочитаны. */
-    private val restoreDone = kotlinx.coroutines.CompletableDeferred<Unit>()
-
-    /** Избранные каналы: отдельная категория в самом верху. */
-    private var favorites: Set<String> = emptySet()
-
-    /** Каналы с нестабильным потоком. */
-    private var unstable: Set<String> = emptySet()
-
-    /** Каналы с проверенным архивом. */
-    private var archiveVerified: Set<String> = emptySet()
-
-    init {
-        // Гид догружается в фоне: как только передачи появились в базе, перестраиваем список,
-        // иначе программа видна только после перезапуска приложения.
-        viewModelScope.launch {
-            epgStore.programmeCount
-                .debounce(2_000)
-                .collect { refresh(force = true) }
-        }
-        // Возвращаемся в категорию, где пользователь был в прошлый раз: после запуска сразу
-        // открыт её список каналов, но вернуться к категориям можно как обычно.
-        viewModelScope.launch {
-            // Избранное читаем сразу, до первой сборки состояния: иначе при восстановлении
-            // категории «Избранное» список каналов оказывался пустым до следующего захода.
-            favorites = runCatching { favoritesStore.channels.first() }.getOrDefault(favorites)
-            unstable = runCatching { settingsStore.unstableChannels.first() }.getOrDefault(emptySet())
-            archiveVerified = runCatching { settingsStore.archiveVerified.first() }.getOrDefault(emptySet())
-            // Проверка архива идёт фоном: обновляем список, как только пришёл результат.
-            launch {
-                settingsStore.archiveVerified.collect { verified ->
-                    archiveVerified = verified
-                    val content = _state.value
-                    if (content is HomeUiState.Content) {
-                        _state.value = content.copy(archiveVerified = verified)
-                    }
-                }
-            }
-            // После возврата из плеера список должен стоять на канале, который только что
-            // смотрели: он же последний в «недавних».
-            recentChannels.channels.first().firstOrNull()?.let { selectedChannelId = ChannelId(it) }
-            val saved = settingsStore.lastCategory.first()
-            if (saved != null && saved.isNotEmpty()) {
-                selectedCategoryId = if (saved == PlayerSettingsStore.ALL_CATEGORY) null else saved
-                showChannels = true
-            }
-            // Состояние соберёт первый refresh() с экрана, но только после этого чтения:
-            // иначе список «Избранного» успевал отрисоваться пустым.
-            restoreDone.complete(Unit)
-        }
-        viewModelScope.launch {
-            favoritesStore.channels.collect { set ->
-                favorites = set
-                refreshFavorites()
-            }
-        }
-    }
-
-    /**
-     * Переключает канал в избранном.
-     *
-     * Состояние меняется сразу (оптимистично), а запись в DataStore идёт следом: иначе сердце
-     * нажимается мгновенно, а канал в категории «Избранное» появляется с задержкой.
-     */
-    fun toggleFavorite(channelId: ChannelId) {
-        val id = channelId.value
-        favorites = if (id in favorites) favorites - id else favorites + id
-        refreshFavorites()
-        viewModelScope.launch { favoritesStore.toggle(id) }
-    }
-
-    /** Пересобирает категории и видимый список после изменения избранного. */
-    private fun refreshFavorites() {
-        val current = _state.value
-        if (current !is HomeUiState.Content) return
-        _state.value = current.copy(
-            favorites = favorites,
-            unstable = unstable,
-            archiveVerified = archiveVerified,
-            categories = categoriesWithFavorites(current.categories),
-            channels = if (selectedCategoryId == FAVORITES_ID) {
-                favoritesChannels()
-            } else {
-                current.channels
-            },
-        )
-    }
-
-    private fun categoriesWithFavorites(base: List<CategoryUi>): List<CategoryUi> =
-        listOf(CategoryUi(id = FAVORITES_ID, name = "Избранное")) +
-            base.filterNot { it.id == FAVORITES_ID }
-
-    private fun favoritesChannels(): List<ChannelUi> =
-        allChannels.filter { it.channel.id.value in favorites }
-            .sortedBy { it.channel.name.lowercase() }
-    private var selectJob: Job? = null
-
-    /** Время последнего обновления данных, которое уже показано на экране. */
-    private var shownSyncAt: Long? = null
-
-    init {
-        viewModelScope.launch { shownSyncAt = syncStatusStore.last()?.atMillis }
-        refresh()
-    }
-
     /**
      * Перечитывает каталог и программу передач.
      *
      * Экран «Загружаем каналы…» показывается только когда показывать ещё нечего: при возврате
-     * из плеера или с настроек список остаётся на месте. Перестройка списка (а это запросы
-     * программы по тысячам каналов) делается только если данные действительно обновились.
+     * из плеера или с настроек список остаётся на месте.
+     *
+     * @param force перестроить состояние, даже если данные не менялись.
      */
     fun refresh(force: Boolean = false) {
         viewModelScope.launch {
-            // Ждём восстановления настроек: без этого первая отрисовка «Избранного» пустая.
             restoreDone.await()
-            // После возврата из плеера выделяем канал, который смотрели последним.
+            // После возврата из плеера карточка показывает канал, который смотрели последним.
             val lastWatched = runCatching { recentChannels.channels.first().firstOrNull() }.getOrNull()
             if (lastWatched != null && lastWatched != selectedChannelId?.value) {
                 selectedChannelId = ChannelId(lastWatched)
-                val content = _state.value
-                if (content is HomeUiState.Content) {
-                    _state.value = content.copy(
-                        selectedChannelId = selectedChannelId,
-                        previewChannel = allChannels.firstOrNull { it.channel.id.value == lastWatched }
-                            ?: content.previewChannel,
-                    )
-                }
             }
             val syncAt = syncStatusStore.last()?.atMillis
-            if (!force && _state.value is HomeUiState.Content && syncAt == shownSyncAt) return@launch
+            if (!force && _state.value is HomeUiState.Content && syncAt == shownSyncAt) {
+                refreshVisible()
+                return@launch
+            }
 
             shownSyncAt = syncAt
             if (_state.value !is HomeUiState.Content) {
@@ -239,91 +340,79 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Выбирает категорию и открывает её каналы.
-     *
-     * @param categoryId ключ категории, `null` — «Все».
-     */
-    fun selectCategory(categoryId: String?) {
-        selectedCategoryId = categoryId
-        showChannels = true
-        viewModelScope.launch { settingsStore.setLastCategory(categoryId) }
+    /** Пересобирает видимый список из уже загруженного каталога. */
+    private fun refreshVisible() {
         val current = _state.value
-        if (current is HomeUiState.Content && allChannels.isNotEmpty()) {
-            // Переключаем категорию из уже загруженного каталога: без повторного чтения базы и
-            // повторного разбора программы — иначе переход в список каналов заметно тормозит.
-            // «Избранное» — не категория канала, а набор отмеченных: фильтр по идентификатору
-            // категории его бы не нашёл, из-за чего список выглядел пустым.
-            val filtered = when {
-                categoryId == FAVORITES_ID -> allChannels.filter { it.channel.id.value in favorites }
-                categoryId == null -> allChannels
-                else -> allChannels.filter { it.channel.categoryId == categoryId }
-            }.sortedBy { it.channel.name.lowercase() }
-            _state.value = current.copy(
-                selectedCategoryId = categoryId,
-                channels = filtered,
-                showChannels = true,
-            )
-            return
-        }
-        viewModelScope.launch { _state.value = buildState() }
+        if (current !is HomeUiState.Content) return
+        _state.value = current.copy(
+            channels = visibleChannels(),
+            favorites = favorites,
+            recent = recent,
+            query = query,
+        )
     }
 
-    /**
-     * Возвращает к списку категорий.
-     *
-     * Состояние живёт в модели, а не в Compose: возврат из плеера должен попадать в список
-     * каналов с тем же выбором, а не начинать с категорий.
-     */
-    fun showCategories() {
-        showChannels = false
-        val current = _state.value
-        if (current is HomeUiState.Content) {
-            _state.value = current.copy(showChannels = false)
-        }
-    }
+    /** Каналы текущего раздела после фильтра по категории и поиску. */
+    private fun visibleChannels(): List<ChannelUi> {
+        val base = when (section) {
+            HomeSection.TV -> when (val category = selectedCategoryId) {
+                null -> allChannels
+                else -> allChannels.filter { it.channel.categoryId == category }
+            }
 
-    /**
-     * Выбирает канал для превью.
-     *
-     * Смена откладывается на несколько сотен миллисекунд: при быстрой прокрутке списка фокус
-     * проскакивает строки, и без задержки превью дёргалось бы на каждом канале.
-     *
-     * @param channelId ключ канала.
-     */
-    fun selectChannel(channelId: ChannelId) {
-        selectJob?.cancel()
-        selectJob = viewModelScope.launch {
-            delay(SELECT_DEBOUNCE_MS)
-            selectedChannelId = channelId
-            val current = _state.value
-            if (current is HomeUiState.Content) {
-                // Превью держим в состоянии вместе с выбором: иначе после возврата из плеера
-                // оно пустое, хотя канал выбран.
-                val preview = current.previewChannel
-                    ?.takeIf { it.channel.id == channelId }
-                    ?: current.channels.firstOrNull { it.channel.id == channelId }
-                _state.value = current.copy(
-                    selectedChannelId = channelId,
-                    previewChannel = preview,
-                )
+            HomeSection.FAVORITES -> allChannels.filter { it.channel.id.value in favorites }
+            // Порядок «Недавних» — порядок просмотра, а не алфавит.
+            HomeSection.RECENT -> recent.mapNotNull { id ->
+                allChannels.firstOrNull { it.channel.id.value == id }
             }
         }
+        val searched = if (query.isBlank()) {
+            base
+        } else {
+            base.filter { it.channel.name.contains(query.trim(), ignoreCase = true) }
+        }
+        return if (section == HomeSection.RECENT) searched else searched.sortedBy { it.channel.name.lowercase() }
     }
+
+    /** Телепрограмма канала для разворота. */
+    private suspend fun scheduleFor(channel: Channel): List<ProgrammeRowUi> {
+        val epgId = epgMatches[channel.id] ?: channel.epgId ?: return emptyList()
+        val now = clock.instant()
+        val programmes = epgStore.programmes(
+            channelId = epgId,
+            from = now.minus(SCHEDULE_BACK_HOURS, ChronoUnit.HOURS),
+            to = now.plus(SCHEDULE_FORWARD_HOURS, ChronoUnit.HOURS),
+        )
+        return ProgrammeRows.build(
+            programmes = programmes,
+            now = now,
+            channelHasArchive = channel.hasArchive(),
+        )
+    }
+
+    /**
+     * Доступен ли архив канала.
+     *
+     * Заявленный провайдером архив считается доступным, пока фоновая проверка не сказала
+     * обратное: пустой набор проверки означает «ещё не проверяли».
+     */
+    private fun Channel.hasArchive(): Boolean =
+        archive != null && (archiveVerified.isEmpty() || id.value in archiveVerified)
 
     private suspend fun buildState(): HomeUiState = runCatching { loadState() }.getOrElse { error ->
         HomeUiState.Error("Не удалось прочитать каталог: ${error.message ?: "неизвестная ошибка"}")
     }
 
-    private suspend fun loadState(): HomeUiState {        val playlist = catalogStore.playlist()
+    private suspend fun loadState(): HomeUiState {
+        val playlist = catalogStore.playlist()
         if (playlist.channels.isEmpty()) {
             return HomeUiState.Empty
         }
 
         val now = clock.instant()
-        val matches = epgMatcher.match(playlist.channels, epgStore.epgChannels()).matches
+        epgMatches = epgMatcher.match(playlist.channels, epgStore.epgChannels()).matches
         val withProgramme = playlist.channels.map { channel ->
-            val epgId = matches[channel.id]
+            val epgId = epgMatches[channel.id]
             if (epgId == null) {
                 ChannelUi(channel = channel, nowTitle = null, nextTitle = null)
             } else {
@@ -344,53 +433,48 @@ class HomeViewModel @Inject constructor(
             }
         }
 
+        // «Избранное» и «Недавние» — разделы, а не категории: в плашке их нет.
         val categories = buildList {
-            add(CategoryUi(id = FAVORITES_ID, name = "Избранное"))
-            add(CategoryUi(id = null, name = "Все"))
+            add(CategoryUi(id = null, name = "Все каналы"))
             // В плейлистах названия категорий часто со строчной буквы — показываем с заглавной.
             playlist.categories.forEach {
                 add(CategoryUi(id = it.id, name = it.name.replaceFirstChar(Char::uppercaseChar)))
             }
         }
 
-        // Каналы по умолчанию идут по названию: так проще находить нужный.
         allChannels = withProgramme
-        // «Избранное» — набор отмеченных каналов, а не категория канала: фильтр по categoryId
-        // давал пустой список после восстановления категории при запуске.
-        val visible = when {
-            selectedCategoryId == FAVORITES_ID -> withProgramme.filter { it.channel.id.value in favorites }
-            selectedCategoryId == null -> withProgramme
-            else -> withProgramme.filter { it.channel.categoryId == selectedCategoryId }
-        }.sortedBy { it.channel.name.lowercase() }
-
-        // Превью не зависит от выбранной категории: канал остаётся тем же, даже если его
-        // нет в списке новой категории.
+        // Карточка не зависит от раздела: канал остаётся выбранным, даже если его нет в списке.
         val previewChannel = withProgramme.firstOrNull { it.channel.id == selectedChannelId }
+        val schedule = if (programmeOpen && previewChannel != null) {
+            scheduleFor(previewChannel.channel)
+        } else {
+            emptyList()
+        }
 
         return HomeUiState.Content(
+            section = section,
             categories = categories,
             selectedCategoryId = selectedCategoryId,
-            channels = visible,
+            channels = visibleChannels(),
             selectedChannelId = selectedChannelId,
             previewChannel = previewChannel,
-            showChannels = showChannels,
             now = now,
             favorites = favorites,
             unstable = unstable,
             archiveVerified = archiveVerified,
+            recent = recent,
+            query = query,
+            programmeOpen = programmeOpen && previewChannel != null,
+            schedule = schedule,
         )
     }
 
     private companion object {
         const val WINDOW_BACK_HOURS = 12L
         const val WINDOW_FORWARD_HOURS = 24L
+        const val SCHEDULE_BACK_HOURS = 12L
+        const val SCHEDULE_FORWARD_HOURS = 24L
         const val STOP_TIMEOUT_MS = 5_000L
-
-        /** Ключ категории «Избранное». */
-        const val FAVORITES_ID = "\u0001favorites"
-
-        /** Как часто обновляем время на экране. */
-        const val CLOCK_TICK_MS = 20_000L
 
         /** Задержка выбора канала при прокрутке списка. */
         const val SELECT_DEBOUNCE_MS = 300L

@@ -1,14 +1,23 @@
 package com.mops1k.smotrishka.tv.ui
 
 import android.net.Uri
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.mops1k.smotrishka.tv.core.designsystem.component.TvToast
+import com.mops1k.smotrishka.tv.core.designsystem.theme.TvDimens
 import com.mops1k.smotrishka.tv.core.model.ChannelId
+import com.mops1k.smotrishka.tv.ui.common.LocalToastController
 import com.mops1k.smotrishka.tv.ui.home.HomeScreen
 import com.mops1k.smotrishka.tv.ui.onboarding.OnboardingScreen
 import com.mops1k.smotrishka.tv.ui.player.PlayerScreen
@@ -67,25 +76,39 @@ fun AppNavHost(
     startDestination: String,
     navController: NavHostController = rememberNavController(),
 ) {
-    NavHost(navController = navController, startDestination = startDestination) {
-        composable(Route.ONBOARDING) {
-            OnboardingScreen(
-                onConnected = {
-                    navController.navigate(Route.HOME) {
-                        popUpTo(Route.HOME) { inclusive = true }
-                        popUpTo(Route.ONBOARDING) { inclusive = true }
-                    }
-                },
-            )
-        }
+    Box(modifier = Modifier.fillMaxSize()) {
+        NavHost(navController = navController, startDestination = startDestination) {
+            composable(Route.ONBOARDING) {
+                val toast = LocalToastController.current
+                // «Отмена» и Esc есть только при входе из настроек: на первом запуске
+                // возвращаться некуда (решение Д12).
+                val canCancel = navController.previousBackStackEntry != null
+                OnboardingScreen(
+                    onConnected = {
+                        // Тост переживает переход: его видно уже на «Телеканалах».
+                        toast.show("Источник подключён, каналы загружены")
+                        navController.navigate(Route.HOME) {
+                            popUpTo(Route.HOME) { inclusive = true }
+                            popUpTo(Route.ONBOARDING) { inclusive = true }
+                        }
+                    },
+                    onCancel = if (canCancel) {
+                        { navController.popBackStack() }
+                    } else {
+                        null
+                    },
+                )
+            }
 
-        composable(Route.HOME) {
-            HomeScreen(
-                onChannelOpen = { channelId -> navController.navigate(Route.player(channelId)) },
-                onOpenProgramme = { channelId -> navController.navigate(Route.programme(channelId)) },
-                onOpenSettings = { navController.navigate(Route.SETTINGS) },
-            )
-        }
+            composable(Route.HOME) {
+                HomeScreen(
+                    onChannelOpen = { channelId -> navController.navigate(Route.player(channelId)) },
+                    onOpenArchive = { channelId, start ->
+                        navController.navigate(Route.playerArchive(channelId, start.epochSecond))
+                    },
+                    onOpenSettings = { navController.navigate(Route.SETTINGS) },
+                )
+            }
 
         composable(
             route = Route.PLAYER,
@@ -143,5 +166,16 @@ fun AppNavHost(
                 onBack = { navController.popBackStack() },
             )
         }
+    }
+
+    // Единственный тост приложения: снизу по центру, поверх любого экрана.
+    val toast = LocalToastController.current
+    TvToast(
+        message = toast.message,
+        onDismiss = toast::clear,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = TvDimens.toastBottom),
+    )
     }
 }

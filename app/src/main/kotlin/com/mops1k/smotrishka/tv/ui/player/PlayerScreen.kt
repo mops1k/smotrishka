@@ -58,6 +58,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -115,6 +116,7 @@ import com.mops1k.smotrishka.tv.core.data.AudioLanguage
 import com.mops1k.smotrishka.tv.core.data.VideoQuality
 import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.ui.home.ProgrammeProgress
+import com.mops1k.smotrishka.tv.ui.player.osd.PlayerOsdTop
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -125,6 +127,7 @@ import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import com.mops1k.smotrishka.tv.R
 
 /**
  * Полноэкранный плеер канала.
@@ -304,6 +307,9 @@ private fun PlayerContent(
         0
     }
     var firstFrame by remember(channel.streamUrl) { mutableStateOf(false) }
+    // Поверхность перепривязывается, когда поток дошёл до READY: без этого на части устройств
+    // кадр не показывается, пока пользователь не тронет экран (загрузка висит, звук идёт).
+    var playerReady by remember(channel.streamUrl) { mutableStateOf(false) }
     var playerCreatedAt by remember(channel.streamUrl) { mutableStateOf(0L) }
     var server by remember(channel.streamUrl) { mutableStateOf<LocalHlsServer?>(null) }
     var autoBuffer by remember(channel.streamUrl) { mutableStateOf(bufferPreferred) }
@@ -618,6 +624,7 @@ private fun PlayerContent(
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
+                playerReady = playbackState == androidx.media3.common.Player.STATE_READY
                 android.util.Log.d(
                     "SmotrishkaBuffer",
                     "player state=$playbackState position=${player.currentPosition} duration=${player.duration}",
@@ -777,23 +784,25 @@ private fun PlayerContent(
                 }
             },
     ) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { viewContext ->
-                PlayerView(viewContext).apply {
-                    useController = false
-                    this.player = player
-                }
-            },
-            update = { view ->
-                // При смене экземпляра плеера (перемотка архива) поверхность перепривязываем:
-                // иначе остаётся чёрная картинка при работающем звуке.
-                if (view.player !== player) view.player = player
-                view.resizeMode = AspectModes.resizeMode(aspectMode)
-            },
-        )
+        run {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { viewContext ->
+                    PlayerView(viewContext).apply {
+                        useController = false
+                        this.player = player
+                    }
+                },
+                update = { view ->
+                    // При смене экземпляра плеера (перемотка архива) поверхность перепривязываем:
+                    // иначе остаётся чёрная картинка при работающем звуке.
+                    if (view.player !== player) view.player = player
+                    view.resizeMode = AspectModes.resizeMode(aspectMode)
+                },
+            )
+        }
 
-        if (!firstFrame) {
+        if (!firstFrame && !playerReady) {
             // Держим надпись до первого кадра: иначе между буфером и картинкой виден чёрный экран.
             Box(
                 modifier = Modifier
@@ -961,83 +970,21 @@ private fun PlayerContent(
                         .windowInsetsPadding(WindowInsets.safeDrawing)
                         .padding(horizontal = 24.dp, vertical = 12.dp),
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onBack) {
-                            Icon(
-                                imageVector = Icons.Filled.ArrowBack,
-                                contentDescription = "Назад",
-                                tint = Color.White,
-                            )
-                        }
-                        Spacer(Modifier.size(8.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            if (channel.isArchive) {
-                                // Видно, что играет не эфир, и можно сразу вернуться в него.
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = "АРХИВ",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = Color(0xFFFFC107),
-                                    )
-                                    Spacer(Modifier.width(12.dp))
-                                    TextButton(onClick = onGoLive) {
-                                        Text(text = "В эфир", color = Color.White)
-                                    }
-                                }
-                            }
-                            Text(
-                                text = channel.title,
-                                style = MaterialTheme.typography.titleLarge,
-                                color = Color.White,
-                            )
-                            channel.programmeTitle?.let { programme ->
-                                Text(
-                                    text = programme,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = Color.White.copy(alpha = 0.85f),
-                                )
-                            }
-                        }
-                        IconButton(onClick = { onOpenProgramme(channel.channelId) }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.List,
-                                contentDescription = "Программа канала",
-                                tint = Color.White,
-                            )
-                        }
-                        IconButton(onClick = onToggleFavorite) {
-                            Icon(
-                                imageVector = if (channel.channelId.value in favorites) {
-                                    Icons.Filled.Favorite
-                                } else {
-                                    Icons.Filled.FavoriteBorder
-                                },
-                                contentDescription = "Избранное",
-                                tint = Color.White,
-                            )
-                        }
-                        IconButton(onClick = { recentsVisible = true }) {
-                            Icon(
-                                imageVector = Icons.Filled.DateRange,
-                                contentDescription = "Недавние каналы",
-                                tint = Color.White,
-                            )
-                        }
-                        // Режим кадра: иконка меняется по кругу «вписать → растянуть → обрезать → 1:1».
-                        IconButton(onClick = onCycleAspect) {
-                            Icon(
-                                imageVector = AspectIcons.of(aspectMode),
-                                contentDescription = AspectModes.label(aspectMode),
-                                tint = Color.White,
-                            )
-                        }
-                        Spacer(Modifier.size(12.dp))
-                        Text(
-                            text = clock,
-                            style = MaterialTheme.typography.titleLarge,
-                            color = Color.White,
-                        )
-                    }
+                    PlayerOsdTop(
+                        channelTitle = channel.title,
+                        programmeTitle = channel.programmeTitle,
+                        isArchive = channel.isArchive,
+                        clock = clock,
+                        favorite = channel.channelId.value in favorites,
+                        aspectIcon = AspectIcons.of(aspectMode),
+                        aspectLabel = AspectModes.label(aspectMode),
+                        onBack = onBack,
+                        onGoLive = onGoLive,
+                        onOpenProgramme = { onOpenProgramme(channel.channelId) },
+                        onToggleFavorite = onToggleFavorite,
+                        onOpenRecents = { recentsVisible = true },
+                        onCycleAspect = onCycleAspect,
+                    )
 
                     Spacer(Modifier.weight(1f))
 
@@ -1409,7 +1356,10 @@ fun LivePreview(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
-                PlayerView(viewContext).apply {
+                // TextureView: SurfaceView в Compose на этом устройстве не получает кадр
+                // до касания экрана, и картинка теряется при пересоздании вьюхи.
+                (android.view.LayoutInflater.from(viewContext)
+                    .inflate(R.layout.player_surface, null) as PlayerView).apply {
                     useController = false
                     this.player = player
                 }

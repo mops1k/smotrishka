@@ -3,6 +3,7 @@ package com.mops1k.smotrishka.tv.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mops1k.smotrishka.tv.core.data.AudioLanguage
+import com.mops1k.smotrishka.tv.core.data.AspectMode
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
 import com.mops1k.smotrishka.tv.core.data.CatalogUpdater
 import com.mops1k.smotrishka.tv.core.playlist.M3uParseResult
@@ -134,6 +135,38 @@ class SettingsViewModel @Inject constructor(
         started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
         initialValue = PlayerSettingsStore.DEFAULT_ARCHIVE_DEPTH_HOURS,
     )
+
+    /** Режим кадра: та же настройка, что в OSD плеера (решение Д4). */
+    val aspectMode: StateFlow<AspectMode> = playerSettingsStore.aspectMode.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+        initialValue = AspectMode.FIT,
+    )
+
+    /** Режим эфира: прямой поток или собственный буфер. */
+    val directStream: StateFlow<Boolean> = playerSettingsStore.directStream.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+        initialValue = true,
+    )
+
+    /**
+     * Меняет режим кадра.
+     *
+     * @param mode выбранный режим.
+     */
+    fun setAspectMode(mode: AspectMode) {
+        viewModelScope.launch { playerSettingsStore.setAspectMode(mode) }
+    }
+
+    /**
+     * Меняет режим эфира.
+     *
+     * @param direct `true` — прямой поток, `false` — собственный буфер.
+     */
+    fun setDirectStream(direct: Boolean) {
+        viewModelScope.launch { playerSettingsStore.setDirectStream(direct) }
+    }
 
     init {
         // Сообщения фонового импортёра показываем в строке состояния настроек.

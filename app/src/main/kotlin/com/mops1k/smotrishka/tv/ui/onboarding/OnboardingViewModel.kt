@@ -95,20 +95,20 @@ class OnboardingViewModel @Inject constructor(
     private fun validate(source: PlaylistSource): String? =
         when (source) {
             is PlaylistSource.M3uUrl -> when {
-                source.url.isBlank() -> "Введите адрес плейлиста"
-                !source.url.isHttpUrl() -> "Адрес должен начинаться с http:// или https://"
+                source.url.isBlank() -> "Укажите адрес плейлиста"
+                !source.url.isHttpUrl() -> "Не удалось загрузить плейлист: проверьте адрес"
                 else -> null
             }
 
             is PlaylistSource.Xtream -> when {
-                !source.server.isHttpUrl() -> "Адрес сервера должен начинаться с http:// или https://"
-                source.username.isBlank() -> "Введите логин"
-                source.password.isBlank() -> "Введите пароль"
+                source.server.isBlank() || source.username.isBlank() -> "Укажите сервер и логин"
+                !source.server.isHttpUrl() -> "Не удалось загрузить плейлист: проверьте адрес"
+                source.password.isBlank() -> "Укажите пароль"
                 else -> null
             }
 
             is PlaylistSource.IedemCode ->
-                if (source.code.isBlank()) "Введите код из личного кабинета iedem.tv" else null
+                if (source.code.isBlank()) "Укажите код из личного кабинета iedem.tv" else null
 
             is PlaylistSource.File ->
                 if (source.uri.isBlank()) "Выберите файл плейлиста" else null
