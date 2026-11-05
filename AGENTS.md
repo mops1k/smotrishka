@@ -1,0 +1,49 @@
+# Правила проекта SmotrishkaTV
+
+Проектные договорённости для агента. Дополняют глобальные правила, не отменяя их.
+
+## Процесс
+
+- TDD на слое данных: тест пишется до кода. Парсеры, построители URL, хранилища, загрузчики и
+  ViewModel'и покрываются юнит-тестами; ввод-вывод через `ContentResolver` и живой плеер проверяются
+  на устройстве.
+- Тесты не мокают собственные типы (модель, парсеры, хранилища) — используются реальные объекты,
+  in-memory Room и `MockWebServer` для сети.
+- План работ и статусы ведутся в хранилище планов (`p_f05c6985928a`, workspace `smotrishka`).
+- Коммиты и push — только по прямой просьбе Александра.
+
+## Код
+
+- Один публичный тип — один файл; KDoc и комментарии по-русски.
+- Ошибки на границах слоёв — `sealed`-результаты (`M3uParseResult`, `XmltvParseResult`,
+  `HttpTextResult`, `UpdateResult`, `ArchiveUrlResult`), а не исключения. Исключение — сбой
+  программирования.
+- Иммутабельные `data class`, маппинг — extension-функциями или отдельными мапперами.
+- ViewModel отдаёт `StateFlow`; use case-классы с `suspend operator invoke` — по необходимости.
+- DI — Hilt; без `build-logic` с конвенциями: конфигурация модулей задаётся в их `build.gradle.kts`
+  напрямую (решение интервью).
+
+## Сборка: проверенные факты окружения
+
+- JDK 21: `/home/mops1k/.local/share/dsh-jetbrains/jdk-21` (в PATH `java` нет).
+- Android SDK: `/home/mops1k/Android/Sdk` (platforms 35/36/37.0, build-tools 36.0.0), пишется в
+  `local.properties` (в git не попадает).
+- Gradle wrapper 9.8.1, AGP 9.4.1 (built-in Kotlin), Kotlin 2.4.21, KSP 2.3.12, Hilt 2.60.1,
+  Compose BOM 2026.09.00, Room 2.8.5, WorkManager 2.12.0, OkHttp 5.5.0, gson 2.11.0, Coil 3.6.3.
+- AGP 9: **не** писать `sourceSets.getByName("main").kotlin.srcDir(...)` — падает на касте
+  `DefaultAndroidLibrarySourceSet`; `src/main/kotlin` входит в набор исходников по умолчанию.
+- WorkManager 2.12: `Configuration.Provider.getWorkManagerConfiguration()` — функция, не property.
+- Robolectric-тесты Room/WorkManager запускаются с `@Config(sdk = [34])`.
+- `:core:model` объявлен через `api` в `:core:data` и `:core:playlist`: их публичные типы
+  принимают и возвращают модельные классы, иначе KSP/Hilt в `:app` не видят модель.
+
+## Устройство
+
+- USB виден только Windows-adb: `/mnt/c/Users/Kvintilyanov/Desktop/platform-tools/adb.exe`,
+  запускать из его каталога с явным портом `-P 5038` (порт по умолчанию 5037 не поднимается).
+- Подключённый телефон: Realme RMX5090 (ColorOS). Приставка Android TV пока не подключена.
+- Обрыв сети на телефоне проверяется через `svc wifi disable` + `svc data disable` (возврат —
+  `svc wifi enable` + `svc data enable`): авиарежим (`cmd connectivity airplane-mode enable`)
+  Wi-Fi не гасит, интернет продолжает работать, и сбой в плеере не воспроизводится.
+- Без устройства UI-регрессии не подтверждены: логика покрыта тестами, раскладка и фокус пульта —
+  проверка вручную.

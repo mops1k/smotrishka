@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Тёмная тема без ActionBar: весь интерфейс рисует Compose. -->
+    <style name="Theme.SmotrishkaTv" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/tv_background</item>
+        <item name="android:statusBarColor">@color/tv_background</item>
+        <item name="android:navigationBarColor">@color/tv_background</item>
+    </style>
+</resources>

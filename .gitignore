@@ -1,0 +1,20 @@
+# Сборочные каталоги
+build/
+.gradle/
+.kotlin/
+captures/
+
+# Локальная конфигурация машины (путь к Android SDK)
+local.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Прочее
+*.hprof
+*.log
+
+# Локальное состояние инструментов (память агента, кэши)
+.dsh/llm-memory/
