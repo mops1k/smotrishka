@@ -10,9 +10,7 @@ import com.mops1k.smotrishka.tv.core.data.AesGcmSecretCipher
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
 import com.mops1k.smotrishka.tv.core.data.CatalogUpdater
 import com.mops1k.smotrishka.tv.core.data.EpgLoader
-import com.mops1k.smotrishka.tv.core.data.EpgGuideRepository
 import com.mops1k.smotrishka.tv.core.data.EpgStore
-import com.mops1k.smotrishka.tv.core.data.FavoritesStore
 import com.mops1k.smotrishka.tv.core.data.HttpBytesClient
 import com.mops1k.smotrishka.tv.core.data.HttpTextClient
 import com.mops1k.smotrishka.tv.core.data.IedemPlaylistLoader
@@ -22,8 +20,6 @@ import com.mops1k.smotrishka.tv.core.data.SecretStore
 import com.mops1k.smotrishka.tv.core.data.SmotrishkaDatabase
 import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
 import com.mops1k.smotrishka.tv.core.data.SourceRepository
-import com.mops1k.smotrishka.tv.core.data.backup.SettingsBackupService
-import com.mops1k.smotrishka.tv.core.data.update.UpdateSettingsStore
 import com.mops1k.smotrishka.tv.core.model.PlaylistSource
 import com.mops1k.smotrishka.tv.core.playlist.M3uParseResult
 import com.mops1k.smotrishka.tv.core.playlist.M3uParser
@@ -71,7 +67,6 @@ class OnboardingViewModelTest {
     private lateinit var database: SmotrishkaDatabase
     private lateinit var sourceRepository: SourceRepository
     private lateinit var updater: CatalogUpdater
-    private lateinit var backupService: SettingsBackupService
     private lateinit var scope: CoroutineScope
 
     @Before
@@ -107,14 +102,6 @@ class OnboardingViewModelTest {
             epgLoader = EpgLoader(HttpBytesClient(OkHttpClient()), XmltvParser()),
             settings = PlayerSettingsStore(dataStore),
         )
-
-        backupService = SettingsBackupService(
-            sourceRepository = sourceRepository,
-            playerSettingsStore = PlayerSettingsStore(dataStore),
-            epgGuideRepository = EpgGuideRepository(database),
-            favoritesStore = FavoritesStore(dataStore),
-            updateSettingsStore = UpdateSettingsStore(dataStore),
-        )
     }
 
     @After
@@ -125,13 +112,7 @@ class OnboardingViewModelTest {
         database.close()
     }
 
-    private fun viewModel() = OnboardingViewModel(
-        sourceRepository,
-        updater,
-        EpgUpdater(updater),
-        backupService,
-        ApplicationProvider.getApplicationContext(),
-    )
+    private fun viewModel() = OnboardingViewModel(sourceRepository, updater, EpgUpdater(updater))
 
     @Test
     fun `онбординг завершается после каталога, не дожидаясь программы передач`() = runBlocking {
