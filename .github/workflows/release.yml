@@ -44,11 +44,14 @@ jobs:
       - name: Gradle cache
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Android SDK
-        uses: android-actions/setup-android@v3
-
+      # Ставим через sdkmanager самого раннера: android-actions/setup-android падает
+      # на установке пакета tools, которого нет в новых cmdline-tools.
       - name: Пакеты Android SDK
-        run: sdkmanager --install "platforms;android-37.0" "build-tools;36.0.0"
+        run: |
+          set -euo pipefail
+          sdkmanager="$(ls -d "$ANDROID_SDK_ROOT"/cmdline-tools/*/bin/sdkmanager | tail -1)"
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" --install "platforms;android-37.0" "build-tools;36.0.0"
 
       - name: Юнит-тесты
         run: >
