@@ -1,9 +1,10 @@
 name: Release
 
 # Два способа выпустить релиз:
-# 1) push тега v0.2.0 — версия берётся из тега;
+# 1) push тега v0.2.0 — версия берётся из тега; тег с суффиксом (v0.2.0-rc.1) даёт пререлиз;
 # 2) ручной запуск (Actions → Release → Run workflow) с версией 0.2.0 — workflow сам
-#    прогонит тесты, соберёт APK, поставит тег v0.2.0 и опубликует релиз.
+#    прогонит тесты, соберёт APK, поставит тег v0.2.0 и опубликует релиз; версия с суффиксом
+#    (0.2.0-rc.1) публикуется как пререлиз.
 # Порядок в обоих случаях один: сначала тесты, затем сборка, только потом публикация.
 on:
   push:
@@ -11,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Версия без префикса v, например 0.2.0'
+        description: 'Версия без префикса v: 0.2.0 или пререлиз 0.2.0-rc.1'
         required: true
         type: string
 
@@ -66,16 +67,22 @@ jobs:
           set -euo pipefail
           if [ "$EVENT" = "workflow_dispatch" ]; then
             value="$INPUT_VERSION"
-            if ! printf '%s' "$value" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-              echo "Версия должна быть в формате X.Y.Z, получено: $value" >&2
-              exit 1
-            fi
           else
             value="${REF_NAME#v}"
           fi
+          # X.Y.Z или пререлиз X.Y.Z-суффикс: суффикс делает релиз пререлизом.
+          if ! printf '%s' "$value" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "Версия должна быть вида 0.2.0 или 0.2.0-rc.1, получено: $value" >&2
+            exit 1
+          fi
+          prerelease=false
+          case "$value" in
+            *-*) prerelease=true ;;
+          esac
           echo "value=$value" >> "$GITHUB_OUTPUT"
           echo "tag=v$value" >> "$GITHUB_OUTPUT"
-          echo "Версия: $value, тег: v$value"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Версия: $value, тег: v$value, пререлиз: $prerelease"
 
       # Ручной запуск ставит тег сам. Тег, созданный GITHUB_TOKEN, не запускает
       # workflow повторно, поэтому рекурсии нет.
@@ -134,6 +141,7 @@ jobs:
         with:
           name: Смотришка ТВ ${{ steps.version.outputs.value }}
           tag_name: ${{ steps.version.outputs.tag }}
+          prerelease: ${{ steps.version.outputs.prerelease }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
