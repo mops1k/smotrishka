@@ -28,6 +28,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.withContext
@@ -68,12 +69,14 @@ class HomeViewModelTest {
     private lateinit var syncStatusStore: SyncStatusStore
     private lateinit var settingsScope: CoroutineScope
     private lateinit var watchNextSync: RecordingWatchNextSync
+    private lateinit var mainDispatcher: TestDispatcher
 
     private val now: Instant = Instant.parse("2026-11-02T20:00:00Z")
 
     @Before
     fun setUp() {
-        Dispatchers.setMain(UnconfinedTestDispatcher())
+        mainDispatcher = UnconfinedTestDispatcher()
+        Dispatchers.setMain(mainDispatcher)
         database = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext(),
             SmotrishkaDatabase::class.java,
@@ -93,6 +96,9 @@ class HomeViewModelTest {
 
     @After
     fun tearDown() {
+        // Отложенные публикации ленты и подписки ViewModel не должны пережить тест:
+        // иначе их продолжения попадают в следующий тест и ломают его планировщик.
+        mainDispatcher.scheduler.advanceUntilIdle()
         Dispatchers.resetMain()
         settingsScope.cancel()
         database.close()

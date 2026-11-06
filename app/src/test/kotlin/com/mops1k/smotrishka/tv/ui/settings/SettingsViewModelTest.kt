@@ -266,6 +266,10 @@ class SettingsViewModelTest {
 
     @Test
     fun `без источника обновление сообщает об этом`() = runTest {
+        // Прогрев: первое чтение поднимает DataStore, иначе оно случается внутри корутины
+        // обновления, и на медленном раннере тест не успевает дождаться статуса.
+        assertThat(repository.active()).isNull()
+
         val viewModel = viewModel()
 
         viewModel.updateData()
