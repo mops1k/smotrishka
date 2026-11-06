@@ -13,6 +13,9 @@ import com.mops1k.smotrishka.tv.core.model.Playlist
 import com.mops1k.smotrishka.tv.core.data.SearchHit
 import com.mops1k.smotrishka.tv.core.data.SearchRepository
 import com.mops1k.smotrishka.tv.core.data.SyncStatusStore
+import com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextCardsBuilder
+import com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextSource
+import com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextSync
 import com.mops1k.smotrishka.tv.core.model.Channel
 import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.core.playlist.EpgMatcher
@@ -65,6 +68,7 @@ class HomeViewModel @Inject constructor(
     private val clock: Clock,
     private val epgUpdater: EpgUpdater,
     private val searchRepository: SearchRepository,
+    private val watchNextSync: WatchNextSync,
 ) : ViewModel() {
 
     /** Фоновая догрузка программы передач: каналы уже доступны, гид приходит позже. */
@@ -149,6 +153,12 @@ class HomeViewModel @Inject constructor(
 
     /** Избранные каналы. */
     private var favorites: Set<String> = emptySet()
+
+    /** Сборка карточек ленты: только каналы с текущей передачей. */
+    private val watchNextBuilder = WatchNextCardsBuilder()
+
+    /** Публикация ленты откладывается: состояние пересобирается несколько раз подряд. */
+    private var watchNextJob: Job? = null
 
     /** Недавние каналы: свежие первыми. */
     private var recent: List<String> = emptyList()
@@ -261,6 +271,7 @@ class HomeViewModel @Inject constructor(
                 programmeOpen = false,
                 schedule = emptyList(),
             )
+            publishWatchNext()
             return
         }
         // Каталог ещё не в памяти — сначала быстрый срез без гида,
@@ -268,6 +279,7 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching { buildState(withEpg = false) }.onSuccess { _state.value = it }
             _state.value = buildWithEpgRetry()
+            publishWatchNext()
         }
     }
 
@@ -321,6 +333,7 @@ class HomeViewModel @Inject constructor(
                 // но не в опубликованном состоянии.
                 showChannels = true,
             )
+            publishWatchNext()
             return
         }
         // Каталог ещё не в памяти: показываем срез без гида, гид догружаем следом, чтобы
@@ -328,6 +341,7 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching { buildState(withEpg = false) }.onSuccess { _state.value = it }
             _state.value = buildState()
+            publishWatchNext()
         }
     }
 
@@ -537,7 +551,58 @@ class HomeViewModel @Inject constructor(
             // Полный проход с повторами: если гид не прочитался сразу, экран не должен
             // оставаться с многоточиями — названия передач в базе есть.
             _state.value = buildWithEpgRetry()
+            publishWatchNext()
         }
+    }
+
+    /**
+     * Пересобирает ленту «Сейчас идёт».
+     *
+     * Приоритет источников (решение Александра 06.11.2026): избранные каналы, затем недавние
+     * (свежие первыми), затем последняя выбранная категория, остаток — случайные каналы
+     * каталога. Канал показывается один раз, каналы без текущей передачи не попадают.
+     * Публикация откладывается: состояние пересобирается несколькими проходами, и каждый
+     * проход в лаунчере был бы лишней записью.
+     */
+    private fun publishWatchNext() {
+        // Каталог берётся целиком, а не из видимого списка: лента не зависит от раздела
+        // и от строки поиска.
+        val sources = allChannels.map { WatchNextSource(it.channel, it.nowTitle) }
+        watchNextJob?.cancel()
+        watchNextJob = viewModelScope.launch {
+            if (!settingsStore.watchNextEnabled.first()) {
+                clearWatchNext()
+                return@launch
+            }
+            val limit = settingsStore.watchNextLimit.first()
+            val lastCategory = settingsStore.lastCategory.first()
+                ?.takeUnless { it == PlayerSettingsStore.ALL_CATEGORY }
+            val cards = watchNextBuilder.build(
+                favourites = favorites,
+                recent = recent,
+                lastCategoryId = lastCategory,
+                channels = sources,
+                limit = limit,
+            )
+            // Показывать нечего — ленты быть не должно: канал удаляется из лаунчера.
+            if (cards.isEmpty()) {
+                clearWatchNext()
+                return@launch
+            }
+            delay(WATCH_NEXT_DEBOUNCE_MS)
+            runCatching { watchNextSync.publish(cards) }
+                .onFailure { error ->
+                    android.util.Log.w(LOGTAG, "лента «Сейчас идёт» не опубликована", error)
+                }
+        }
+    }
+
+    /** Убирает канал ленты из лаунчера: показывать нечего или лента выключена. */
+    private suspend fun clearWatchNext() {
+        runCatching { watchNextSync.clear() }
+            .onFailure { error ->
+                android.util.Log.w(LOGTAG, "лента «Сейчас идёт» не удалена", error)
+            }
     }
 
     /** Пересобирает видимый список из уже загруженного каталога. */
@@ -891,5 +956,11 @@ class HomeViewModel @Inject constructor(
 
         /** Задержка выбора канала при прокрутке списка. */
         const val SELECT_DEBOUNCE_MS = 300L
+
+        /** Пауза перед публикацией ленты: состояние успевает устояться после нескольких проходов. */
+        const val WATCH_NEXT_DEBOUNCE_MS = 800L
+
+        /** Тег журнала главного экрана. */
+        const val LOGTAG = "SmotrishkaHome"
     }
 }

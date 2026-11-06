@@ -35,6 +35,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+
+            <!-- Диплинк из карточки ленты «Сейчас идёт» на домашнем экране Android TV:
+                 smotrishka://watch?channel=<id> открывает канал сразу в плеере. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:host="watch"
+                    android:scheme="smotrishka" />
+            </intent-filter>
         </activity>
 
         <!-- WorkManager инициализируется Hilt-фабрикой воркеров в Application,

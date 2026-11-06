@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.google.common.truth.Truth.assertThat
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
+import com.mops1k.smotrishka.tv.core.data.ChannelEpgStore
 import com.mops1k.smotrishka.tv.core.data.EpgStore
 import com.mops1k.smotrishka.tv.core.data.SearchRepository
 import com.mops1k.smotrishka.tv.core.data.FavoritesStore
@@ -24,13 +25,17 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.yield
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -62,6 +67,7 @@ class HomeViewModelTest {
     private lateinit var settingsStore: PlayerSettingsStore
     private lateinit var syncStatusStore: SyncStatusStore
     private lateinit var settingsScope: CoroutineScope
+    private lateinit var watchNextSync: RecordingWatchNextSync
 
     private val now: Instant = Instant.parse("2026-11-02T20:00:00Z")
 
@@ -82,6 +88,7 @@ class HomeViewModelTest {
         recentChannels = RecentChannelsStore(dataStore)
         settingsStore = PlayerSettingsStore(dataStore)
         syncStatusStore = SyncStatusStore(dataStore)
+        watchNextSync = RecordingWatchNextSync()
     }
 
     @After
@@ -102,7 +109,7 @@ class HomeViewModelTest {
     private fun viewModel() = HomeViewModel(
         catalogStore = catalogStore,
         epgStore = epgStore,
-        epgMatcher = EpgMatcher(),
+        channelEpgStore = channelEpgStore(),
         settingsStore = settingsStore,
         favoritesStore = favoritesStore,
         recentChannels = recentChannels,
@@ -110,6 +117,14 @@ class HomeViewModelTest {
         clock = Clock.fixed(now, ZoneOffset.UTC),
         epgUpdater = epgUpdater(),
         searchRepository = searchRepository,
+        watchNextSync = watchNextSync,
+    )
+
+    /** Связи каналов с гидом: на них же опирается лента «Сейчас идёт». */
+    private fun channelEpgStore() = ChannelEpgStore(
+        dao = database.channelEpgDao(),
+        epgStore = epgStore,
+        epgMatcher = EpgMatcher(),
     )
 
     /** Настоящий EpgUpdater на тестовых хранилищах: состояние читается, сеть не нужна. */
@@ -219,7 +234,11 @@ class HomeViewModelTest {
             ),
         )
 
-        val content = viewModel().state.first { it is HomeUiState.Content } as HomeUiState.Content
+        // Экран сначала отдаёт каналы без гида (быстрый срез), передачи подставляются
+        // следующим проходом: ждём состояние именно с программой.
+        val content = viewModel().state.first {
+            it is HomeUiState.Content && it.channels.any { channel -> channel.nowTitle != null }
+        } as HomeUiState.Content
         val channel = content.channels.first { it.channel.id == ChannelId("one") }
 
         assertThat(channel.nowTitle).isEqualTo("Идёт сейчас")
@@ -290,7 +309,7 @@ class HomeViewModelTest {
     }
 
     @Test
-    fun `смена категории сохраняет тот же канал в карточке`() = runTest {
+    fun `смена категории переносит выбор на канал новой категории`() = runTest {
         playlist()
         val model = viewModel()
         model.state.first { it is HomeUiState.Content }
@@ -299,11 +318,13 @@ class HomeViewModelTest {
 
         model.selectCategory("основные")
 
+        // Выбранного канала в новой категории нет: выбор уходит на её первый канал,
+        // иначе фокус оставался бы на невидимом канале.
         val content = model.state.first {
             it is HomeUiState.Content && it.selectedCategoryId == "основные"
         } as HomeUiState.Content
-        assertThat(content.selectedChannelId).isEqualTo(ChannelId("two"))
-        assertThat(content.previewChannel?.channel?.id).isEqualTo(ChannelId("two"))
+        assertThat(content.selectedChannelId).isEqualTo(ChannelId("one"))
+        assertThat(content.previewChannel?.channel?.id).isEqualTo(ChannelId("one"))
     }
 
     @Test
@@ -457,5 +478,139 @@ class HomeViewModelTest {
             it is HomeUiState.Content && it.favorites.isNotEmpty()
         } as HomeUiState.Content
         assertThat(content.favorites).contains("one")
+    }
+
+    @Test
+    fun `лента публикует каналы с текущей передачей`() = runTest {
+        playlist()
+        guide(
+            EpgChannel(id = "one", displayName = "Первый") to "Идёт сейчас",
+        )
+        // Связи каналов с гидом строятся при обновлении каталога: без них первый проход
+        // экрана идёт без передач, и лента публикуется только следующим проходом.
+        channelEpgStore().rebuild(catalogStore.playlist().channels)
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content && it.channels.any { c -> c.nowTitle != null } }
+
+        val cards = awaitPublished()
+
+        assertThat(cards.map { it.channelId }).containsExactly("one")
+        assertThat(cards.single().subtitle).isEqualTo("Идёт сейчас")
+    }
+
+    @Test
+    fun `смена категории поднимает её каналы в начало ленты`() = runTest {
+        playlist()
+        guide(
+            EpgChannel(id = "one", displayName = "Первый") to "Новости",
+            EpgChannel(id = "two", displayName = "Киноканал") to "Фильм",
+        )
+        channelEpgStore().rebuild(catalogStore.playlist().channels)
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content && it.channels.any { c -> c.nowTitle != null } }
+
+        model.selectCategory("кино")
+
+        // Категория — третий приоритет: её канал идёт первым, остальные могут добраться дальше.
+        val cards = awaitPublished { it.isNotEmpty() && it.first().channelId == "two" }
+        assertThat(cards.first().channelId).isEqualTo("two")
+        assertThat(cards.map { it.channelId }).containsNoDuplicates()
+    }
+
+    @Test
+    fun `избранный канал идёт в ленте первым`() = runTest {
+        playlist()
+        guide(
+            EpgChannel(id = "one", displayName = "Первый") to "Новости",
+            EpgChannel(id = "two", displayName = "Киноканал") to "Фильм",
+        )
+        channelEpgStore().rebuild(catalogStore.playlist().channels)
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content && it.channels.any { c -> c.nowTitle != null } }
+
+        model.toggleFavorite(ChannelId("two"))
+        model.refresh(force = true)
+
+        val cards = awaitPublished { it.firstOrNull()?.channelId == "two" }
+        assertThat(cards.first().subtitle).isEqualTo("Фильм")
+        assertThat(cards.map { it.channelId }).containsNoDuplicates()
+    }
+
+    @Test
+    fun `нет каналов с передачей — лента убирается из лаунчера`() = runTest {
+        playlist()
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content }
+
+        model.refresh(force = true)
+        awaitCleared()
+    }
+
+    @Test
+    fun `выключенная лента убирается при обновлении экрана`() = runTest {
+        playlist()
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content }
+
+        settingsStore.setWatchNextEnabled(false)
+        assertThat(settingsStore.watchNextEnabled.first()).isFalse()
+
+        model.refresh(force = true)
+        awaitCleared()
+    }
+
+    /**
+     * Дожидается публикации ленты.
+     *
+     * Публикация отложена на [HomeViewModel.WATCH_NEXT_DEBOUNCE_MS], а тумблер читается из
+     * DataStore на реальном диспетчере: виртуальное время прокручивается, а между шагами
+     * даётся несколько миллисекунд реального времени, иначе ввод-вывод не успевает.
+     */
+    private suspend fun TestScope.awaitPublished(
+        predicate: (List<com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextCard>) -> Boolean = { it.isNotEmpty() },
+    ): List<com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextCard> {
+        repeat(AWAIT_STEPS) {
+            advanceUntilIdle()
+            watchNextSync.last?.takeIf(predicate)?.let { return it }
+            yield()
+            withContext(Dispatchers.Default) { delay(AWAIT_REAL_MS) }
+        }
+        throw AssertionError("лента не опубликована: ${watchNextSync.published}")
+    }
+
+    /** Дожидается, что лента убрана из лаунчера. */
+    private suspend fun TestScope.awaitCleared() {
+        repeat(AWAIT_STEPS) {
+            advanceUntilIdle()
+            if (watchNextSync.cleared > 0) return
+            yield()
+            withContext(Dispatchers.Default) { delay(AWAIT_REAL_MS) }
+        }
+        throw AssertionError("лента не убрана из лаунчера")
+    }
+
+    /** Гид с текущими передачами: по передаче на каждый канал. */
+    private suspend fun guide(vararg programmes: Pair<EpgChannel, String>) {
+        epgStore.replace(
+            Epg(
+                channels = programmes.map { it.first },
+                programmes = programmes.map { (channel, title) ->
+                    Programme(
+                        channelId = channel.id,
+                        title = title,
+                        start = now.minusSeconds(1800),
+                        end = now.plusSeconds(1800),
+                    )
+                },
+            ),
+        )
+    }
+
+    private companion object {
+        /** Сколько шагов виртуального времени даём отложенной публикации ленты. */
+        const val AWAIT_STEPS = 100
+
+        /** Сколько реального времени ждём ввода-вывода между шагами. */
+        const val AWAIT_REAL_MS = 25L
     }
 }

@@ -443,6 +443,9 @@ private fun SectionContent(
                     else -> onLeftToCategories
                 },
                 onFocusInList = onFocusInList,
+                // Что за список показан: по этому ключу сбрасываются прокрутка и фокус,
+                // иначе они переезжали из «Телеканалов» в «Избранное» и поиск.
+                listKey = "${content.section}|${content.selectedCategoryId.orEmpty()}|${content.query}",
             )
             }
 

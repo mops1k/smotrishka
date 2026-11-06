@@ -32,6 +32,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.PlayArrow
@@ -111,6 +112,8 @@ fun SettingsScreen(
     val guideMessage by viewModel.guideMessage.collectAsStateWithLifecycle()
     val aspectMode by viewModel.aspectMode.collectAsStateWithLifecycle()
     val directStream by viewModel.directStream.collectAsStateWithLifecycle()
+    val watchNextEnabled by viewModel.watchNextEnabled.collectAsStateWithLifecycle()
+    val watchNextLimit by viewModel.watchNextLimit.collectAsStateWithLifecycle()
     var guideDialog by remember { mutableStateOf(false) }
     val toast = LocalToastController.current
     val context = LocalContext.current
@@ -226,12 +229,27 @@ fun SettingsScreen(
                             toast.show(if (direct) "Режим эфира: прямой поток" else "Режим эфира: свой буфер")
                         },
                     )
+                    Spacer(Modifier.height(17.dp))
+                    HomeScreenCard(
+                        watchNextEnabled = watchNextEnabled,
+                        watchNextLimit = watchNextLimit,
+                        onWatchNext = { enabled ->
+                            viewModel.setWatchNextEnabled(enabled)
+                            toast.show(
+                                if (enabled) {
+                                    "Лента «Сейчас идёт» включена"
+                                } else {
+                                    "Лента «Сейчас идёт» выключена"
+                                },
+                            )
+                        },
+                        onWatchNextLimit = viewModel::setWatchNextLimit,
+                    )
                     Spacer(Modifier.height(20.dp))
                 }
             }
         }
     }
-
     if (guideDialog) {
         AddGuideDialog(
             busy = guideBusy,
@@ -396,6 +414,53 @@ private fun PlaybackCard(
             checked = dataSaver,
             onToggle = onDataSaver,
         )
+    }
+}
+
+/**
+ * Карточка «Домашний экран»: лента «Сейчас идёт» в лаунчере Android TV.
+ *
+ * @param watchNextEnabled включена ли лента;
+ * @param watchNextLimit сколько карточек публикуется;
+ * @param onWatchNext переключение ленты;
+ * @param onWatchNextLimit изменение количества карточек.
+ */
+@Composable
+private fun HomeScreenCard(
+    watchNextEnabled: Boolean,
+    watchNextLimit: Int,
+    onWatchNext: (Boolean) -> Unit,
+    onWatchNextLimit: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    SettingsCard(
+        icon = Icons.Filled.Home,
+        iconTint = Color(0xFF8FB8FF),
+        iconBackground = Color(0x213E8BE0),
+        title = "Домашний экран",
+        subtitle = "Лента на главном экране Android TV",
+        modifier = modifier,
+    ) {
+        ToggleRow(
+            title = "Лента «Сейчас идёт»",
+            hint = "Канал приложения с текущими передачами; выключение убирает его из лаунчера",
+            checked = watchNextEnabled,
+            onToggle = onWatchNext,
+        )
+        if (watchNextEnabled) {
+            SettingsRow(
+                title = "Карточек в ленте",
+                value = "$watchNextLimit",
+                hint = "Сначала избранное и недавние, затем последняя категория и остальные каналы",
+            )
+            ChoiceGroup(
+                options = PlayerSettingsStore.WATCH_NEXT_LIMIT_CHOICES.map {
+                    "$it" to (it == watchNextLimit)
+                },
+                columns = PlayerSettingsStore.WATCH_NEXT_LIMIT_CHOICES.size,
+                onPick = { index -> onWatchNextLimit(PlayerSettingsStore.WATCH_NEXT_LIMIT_CHOICES[index]) },
+            )
+        }
     }
 }
 

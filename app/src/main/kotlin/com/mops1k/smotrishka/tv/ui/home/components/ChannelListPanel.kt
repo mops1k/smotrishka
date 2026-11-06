@@ -15,7 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -25,8 +25,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import kotlinx.coroutines.launch
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -44,6 +42,7 @@ import com.mops1k.smotrishka.tv.core.designsystem.theme.TvDimens
 import com.mops1k.smotrishka.tv.core.designsystem.theme.TvType
 import com.mops1k.smotrishka.tv.ui.common.TextFormat
 import com.mops1k.smotrishka.tv.ui.home.ChannelUi
+import com.mops1k.smotrishka.tv.ui.home.ListCentering
 import java.time.Instant
 import java.time.ZoneId
 
@@ -63,7 +62,8 @@ import java.time.ZoneId
  * @param onSelect выбор канала (наведение фокуса, превью);
  * @param onOpen открытие канала в плеере (только OK);
  * @param onShowProgramme открыть телепрограмму канала;
- * @param modifier размеры панели.
+ * @param modifier размеры панели;
+ * @param listKey что за список показан (раздел, категория, запрос).
  */
 @Composable
 fun ChannelListPanel(
@@ -92,6 +92,8 @@ fun ChannelListPanel(
     onActivateMenu: (() -> Unit)? = null,
     // Сообщает наверх, что фокус внутри списка: по нему экран решает, куда ведёт «влево».
     onFocusInList: (Boolean) -> Unit = {},
+    // Что за список показан (раздел, категория, запрос): по нему сбрасываются прокрутка и фокус.
+    listKey: String,
 ) {
     TvPanel(
         modifier = modifier.onFocusChanged { onFocusInList(it.hasFocus) },
@@ -120,6 +122,7 @@ fun ChannelListPanel(
                     onOpen = onOpen,
                     onShowProgramme = onShowProgramme,
                     narrow = narrow,
+                    listKey = listKey,
                 )
             }
         }
@@ -178,7 +181,8 @@ private fun ListHeader(title: String, count: Int) {
  * @param onSelect выбор канала (наведение фокуса, превью);
  * @param onOpen открытие канала в плеере (только OK);
  * @param onShowProgramme открыть телепрограмму;
- * @param narrow узкий режим: блок времени в строке скрыт.
+ * @param narrow узкий режим: блок времени в строке скрыт;
+ * @param listKey что за список показан: по нему сбрасываются прокрутка и фокус.
  */
 @Composable
 private fun ChannelList(
@@ -198,14 +202,20 @@ private fun ChannelList(
     leftTarget: FocusRequester? = null,
     rowFocusRequester: FocusRequester? = null,
     onActivateMenu: (() -> Unit)? = null,
+    listKey: String = "",
 ) {
-    val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
+    // Список пересоздаётся при смене раздела, категории или запроса: иначе позиция прокрутки
+    // и «фокус уже восстановлен» переезжали из одного списка в другой, и строки в «Избранном»
+    // листались без центрирования.
+    val listState = remember(listKey) { LazyListState() }
     val internalRequester = remember { FocusRequester() }
     val focusRequester = rowFocusRequester ?: internalRequester
     // true — фокус ставим на первую строку (выбранного канала в списке нет).
-    var focusFirstRow by remember(channels.size) { mutableStateOf(false) }
+    var focusFirstRow by remember(listKey, channels.size) { mutableStateOf(false) }
     val selectedIndex = channels.indexOfFirst { it.channel.id == selectedChannelId }
+
+    /** Индекс строки с фокусом: список центрируется по нему в одном месте. */
+    var focusedIndex by remember(listKey) { mutableStateOf(-1) }
 
     /**
      * Ставит строку в середину видимой области.
@@ -214,20 +224,24 @@ private fun ChannelList(
      * не «прилипает» к краю и видно следующие каналы.
      */
     suspend fun centerOn(index: Int) {
-        if (index < 0) return
-        val visible = listState.layoutInfo.visibleItemsInfo.size.takeIf { it > 0 } ?: DEFAULT_VISIBLE_ROWS
-        listState.scrollToItem((index - visible / 2).coerceAtLeast(0))
+        val rows = listState.layoutInfo.visibleItemsInfo.size.takeIf { it > 0 } ?: DEFAULT_VISIBLE_ROWS
+        val target = ListCentering.targetIndex(index, rows) ?: return
+        listState.scrollToItem(target)
     }
 
-    // Список прокручивается к выбранному каналу: после возврата из плеера видно, где были.
-    LaunchedEffect(selectedChannelId, channels.size) {
-        centerOn(selectedIndex)
+    // Один эффект на центрирование: и при переходе фокуса, и при возврате на выбранный канал.
+    LaunchedEffect(focusedIndex, selectedChannelId, channels.size) {
+        if (focusedIndex >= 0) {
+            centerOn(focusedIndex)
+        } else {
+            centerOn(selectedIndex)
+        }
     }
 
     // Пульт остаётся на канале, который смотрели: иначе после Back из плеера фокус улетал
     // на первый элемент (проверено на устройстве 05.11.2026).
-    var focusRestored by remember(channels.size) { mutableStateOf(false) }
-    LaunchedEffect(channels.size) {
+    var focusRestored by remember(listKey, channels.size) { mutableStateOf(false) }
+    LaunchedEffect(listKey, channels.size) {
         if (focusRestored) return@LaunchedEffect
         // Если выбранного канала нет в этом списке (сменилась категория), фокус ставится
         // на первую строку: иначе он оставался в левом меню, а список стоял без фокуса.
@@ -266,8 +280,8 @@ private fun ChannelList(
                     onClick = { onOpen(item.channel.id) },
                     onFocused = {
                         onSelect(item.channel.id)
-                        // Фокус уходит на следующую строку — держим её в середине списка.
-                        scope.launch { centerOn(index) }
+                        // Фокус ушёл на строку — центрируем её одним эффектом выше.
+                        focusedIndex = index
                     },
                     onShowProgramme = onShowProgramme,
                     narrow = narrow,

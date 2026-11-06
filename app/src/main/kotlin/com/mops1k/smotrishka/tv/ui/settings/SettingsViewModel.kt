@@ -16,6 +16,7 @@ import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
 import com.mops1k.smotrishka.tv.core.data.SourceRepository
 import com.mops1k.smotrishka.tv.core.data.SyncStatusStore
 import com.mops1k.smotrishka.tv.core.data.VideoQuality
+import com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextSync
 import com.mops1k.smotrishka.tv.core.model.EpgGuide
 import com.mops1k.smotrishka.tv.core.model.PlaylistSource
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -55,6 +56,7 @@ class SettingsViewModel @Inject constructor(
     private val playlistImporter: PlaylistImporter,
     private val epgGuideRepository: EpgGuideRepository,
     private val epgGuideValidator: EpgGuideValidator,
+    private val watchNextSync: WatchNextSync,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<SettingsUiState>(SettingsUiState.Loading)
@@ -120,6 +122,20 @@ class SettingsViewModel @Inject constructor(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
         initialValue = false,
+    )
+
+    /** Лента «Сейчас идёт» на домашнем экране Android TV. */
+    val watchNextEnabled: StateFlow<Boolean> = playerSettingsStore.watchNextEnabled.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+        initialValue = PlayerSettingsStore.DEFAULT_WATCH_NEXT_ENABLED,
+    )
+
+    /** Сколько карточек показывать в ленте «Сейчас идёт». */
+    val watchNextLimit: StateFlow<Int> = playerSettingsStore.watchNextLimit.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+        initialValue = PlayerSettingsStore.DEFAULT_WATCH_NEXT_LIMIT,
     )
 
     /** Язык звука по умолчанию. */
@@ -347,6 +363,34 @@ class SettingsViewModel @Inject constructor(
      */
     fun setDataSaver(enabled: Boolean) {
         viewModelScope.launch { playerSettingsStore.setDataSaver(enabled) }
+    }
+
+    /**
+     * Включает или выключает ленту «Сейчас идёт» на домашнем экране Android TV.
+     *
+     * Выключение сразу убирает канал из лаунчера, не дожидаясь возврата на главный экран.
+     *
+     * @param enabled публиковать ли канал приложения в лаунчере.
+     */
+    fun setWatchNextEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            playerSettingsStore.setWatchNextEnabled(enabled)
+            if (!enabled) {
+                runCatching { watchNextSync.clear() }
+                    .onFailure { error ->
+                        android.util.Log.w("SmotrishkaSettings", "лента «Сейчас идёт» не удалена", error)
+                    }
+            }
+        }
+    }
+
+    /**
+     * Меняет количество карточек в ленте «Сейчас идёт».
+     *
+     * @param limit значение из [PlayerSettingsStore.WATCH_NEXT_LIMIT_CHOICES].
+     */
+    fun setWatchNextLimit(limit: Int) {
+        viewModelScope.launch { playerSettingsStore.setWatchNextLimit(limit) }
     }
 
     /**

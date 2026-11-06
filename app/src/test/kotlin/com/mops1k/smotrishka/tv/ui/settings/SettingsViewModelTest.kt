@@ -29,15 +29,19 @@ import com.mops1k.smotrishka.tv.core.model.Channel
 import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.core.model.Playlist
 import com.mops1k.smotrishka.tv.core.model.PlaylistSource
+import com.mops1k.smotrishka.tv.ui.home.RecordingWatchNextSync
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -74,6 +78,7 @@ class SettingsViewModelTest {
     private lateinit var guideValidator: EpgGuideValidator
     private lateinit var server: MockWebServer
     private lateinit var scope: CoroutineScope
+    private lateinit var watchNextSync: RecordingWatchNextSync
 
     @Before
     fun setUp() {
@@ -115,6 +120,7 @@ class SettingsViewModelTest {
         )
         guideRepository = EpgGuideRepository(database)
         guideValidator = EpgGuideValidator(HttpBytesClient(httpClient))
+        watchNextSync = RecordingWatchNextSync()
     }
 
     @After
@@ -143,6 +149,7 @@ class SettingsViewModelTest {
         ),
         epgGuideRepository = guideRepository,
         epgGuideValidator = guideValidator,
+        watchNextSync = watchNextSync,
     )
 
     @Test
@@ -157,6 +164,23 @@ class SettingsViewModelTest {
         viewModel.setBufferSeconds(10)
 
         assertThat(viewModel.bufferSeconds.first { it == 10 }).isEqualTo(10)
+    }
+
+    @Test
+    fun `выключение ленты на домашнем экране убирает канал из лаунчера`() = runTest {
+        val viewModel = viewModel()
+
+        viewModel.setWatchNextEnabled(false)
+
+        // Запись настройки и очистка канала идут на реальном диспетчере DataStore:
+        // ждём события, а не фиксируем его сразу после вызова.
+        withContext(Dispatchers.Default) {
+            withTimeout(AWAIT_MS) {
+                while (watchNextSync.cleared == 0) delay(5)
+            }
+        }
+        assertThat(settingsStore.watchNextEnabled.first()).isFalse()
+        assertThat(watchNextSync.cleared).isAtLeast(1)
     }
 
     @Test
@@ -280,5 +304,10 @@ class SettingsViewModelTest {
         viewModel.guideBusy.first { !it }
         assertThat(viewModel.guides.value).isEmpty()
         assertThat(viewModel.guideMessage.value).contains("404")
+    }
+
+    private companion object {
+        /** Сколько реального времени ждём очистки ленты на диспетчере DataStore. */
+        const val AWAIT_MS = 2_000L
     }
 }

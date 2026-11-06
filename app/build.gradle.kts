@@ -3,11 +3,38 @@ import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 import java.util.Properties
 
 // Ключ релиза лежит вне репозитория: ~/.android-keystores/smotrishka-release.properties.
-// Файла нет (другая машина, CI) — release подписывается отладочным ключом, как раньше.
+// В CI ключ приходит секретом GitHub: workflow распаковывает base64 в файл и передаёт путь
+// в RELEASE_KEYSTORE_FILE, пароли — переменными окружения. Нет ни того, ни другого —
+// release подписывается отладочным ключом, как раньше (APK всё равно устанавливается).
 val releaseKeystoreProps: Properties? = run {
     val file = File(System.getProperty("user.home"), ".android-keystores/smotrishka-release.properties")
     if (!file.exists()) null else Properties().apply { file.inputStream().use { load(it) } }
 }
+
+/** Подпись релиза: сначала окружение CI, затем локальный файл ключей, иначе `null`. */
+val releaseSigning: Properties? = System.getenv("RELEASE_KEYSTORE_FILE")
+    ?.takeIf { it.isNotBlank() }
+    ?.let { path ->
+        Properties().apply {
+            setProperty("storeFile", path)
+            setProperty("storePassword", System.getenv("RELEASE_KEYSTORE_PASSWORD").orEmpty())
+            setProperty("keyAlias", System.getenv("RELEASE_KEY_ALIAS").orEmpty())
+            setProperty("keyPassword", System.getenv("RELEASE_KEY_PASSWORD").orEmpty())
+        }
+    }
+    ?: releaseKeystoreProps
+
+/**
+ * Версия приложения: из CI (`-PversionName`/`-PversionCode` или переменные окружения),
+ * иначе — значения по умолчанию этой машины. Релизный workflow берёт версию из тега.
+ */
+val appVersionName: String = (project.findProperty("versionName") as String?)
+    ?: System.getenv("VERSION_NAME")
+    ?: "0.1.0"
+
+val appVersionCode: Int = (project.findProperty("versionCode") as String?)?.toIntOrNull()
+    ?: System.getenv("VERSION_CODE")?.toIntOrNull()
+    ?: 1
 
 plugins {
     alias(libs.plugins.android.application)
@@ -24,8 +51,8 @@ android {
         applicationId = "com.mops1k.smotrishka.tv"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
 
     buildTypes {
@@ -38,9 +65,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            // Свой ключ релиза, если он есть на этой машине; иначе отладочный ключ,
-            // иначе APK нельзя установить на приставку.
-            signingConfig = releaseKeystoreProps?.let { props ->
+            // Свой ключ релиза, если он есть на этой машине или пришёл секретом в CI;
+            // иначе отладочный ключ, иначе APK нельзя установить на приставку.
+            signingConfig = releaseSigning?.let { props ->
                 signingConfigs.create("release") {
                     storeFile = File(props.getProperty("storeFile"))
                     storePassword = props.getProperty("storePassword")

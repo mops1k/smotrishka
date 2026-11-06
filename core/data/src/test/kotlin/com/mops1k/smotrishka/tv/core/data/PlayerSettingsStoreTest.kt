@@ -170,4 +170,37 @@ class PlayerSettingsStoreTest {
         store.setArchiveDepthHours(1)
         assertThat(store.archiveDepthHours.first()).isEqualTo(24)
     }
+
+    @Test
+    fun `лента на домашнем экране включена по умолчанию`() = runTest {
+        assertThat(store.watchNextEnabled.first()).isTrue()
+    }
+
+    @Test
+    fun `выключение ленты на домашнем экране сохраняется`() = runTest {
+        store.setWatchNextEnabled(false)
+
+        assertThat(store.watchNextEnabled.first()).isFalse()
+    }
+
+    @Test
+    fun `количество карточек ленты по умолчанию десять`() = runTest {
+        assertThat(store.watchNextLimit.first()).isEqualTo(10)
+    }
+
+    @Test
+    fun `выбранное количество карточек ленты сохраняется`() = runTest {
+        store.setWatchNextLimit(15)
+
+        assertThat(store.watchNextLimit.first()).isEqualTo(15)
+    }
+
+    @Test
+    fun `количество карточек ленты ограничено краями списка`() = runTest {
+        store.setWatchNextLimit(1000)
+        assertThat(store.watchNextLimit.first()).isEqualTo(20)
+
+        store.setWatchNextLimit(1)
+        assertThat(store.watchNextLimit.first()).isEqualTo(5)
+    }
 }

@@ -7,6 +7,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
+import com.mops1k.smotrishka.tv.core.data.ChannelEpgStore
 import com.mops1k.smotrishka.tv.core.data.EpgStore
 import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
 import com.mops1k.smotrishka.tv.core.data.SmotrishkaDatabase
@@ -89,6 +90,11 @@ class PlayerViewModelTest {
         catalogStore = catalogStore,
         epgStore = epgStore,
         epgMatcher = EpgMatcher(),
+        channelEpgStore = ChannelEpgStore(
+            dao = database.channelEpgDao(),
+            epgStore = epgStore,
+            epgMatcher = EpgMatcher(),
+        ),
         settingsStore = settingsStore,
         recentChannels = com.mops1k.smotrishka.tv.core.data.RecentChannelsStore(dataStore),
         favoritesStore = com.mops1k.smotrishka.tv.core.data.FavoritesStore(dataStore),

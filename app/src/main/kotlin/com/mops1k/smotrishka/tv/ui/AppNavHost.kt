@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -69,11 +70,15 @@ object Route {
  * Навигация приложения.
  *
  * @param startDestination стартовый маршрут: онбординг или сразу главный экран;
+ * @param pendingChannelId канал из диплинка ленты «Сейчас идёт», который надо открыть в плеере;
+ * @param onPendingChannelConsumed диплинк обработан — повторять его не нужно;
  * @param navController контроллер навигации.
  */
 @Composable
 fun AppNavHost(
     startDestination: String,
+    pendingChannelId: ChannelId? = null,
+    onPendingChannelConsumed: () -> Unit = {},
     navController: NavHostController = rememberNavController(),
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
@@ -177,5 +182,15 @@ fun AppNavHost(
             .align(Alignment.BottomCenter)
             .padding(bottom = TvDimens.toastBottom),
     )
+
+    // Диплинк из карточки ленты: канал открывается сразу в плеере. Без настроенного
+    // источника открывать нечего — пользователь попадает в онбординг.
+    LaunchedEffect(pendingChannelId, startDestination) {
+        val channelId = pendingChannelId ?: return@LaunchedEffect
+        if (startDestination == Route.HOME) {
+            navController.navigate(Route.player(channelId)) { launchSingleTop = true }
+        }
+        onPendingChannelConsumed()
+    }
     }
 }

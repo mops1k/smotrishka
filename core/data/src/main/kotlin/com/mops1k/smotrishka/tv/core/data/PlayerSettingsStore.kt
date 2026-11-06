@@ -91,6 +91,26 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
         preferences[DATA_SAVER_KEY] ?: false
     }
 
+    /**
+     * Лента «Сейчас идёт» на домашнем экране Android TV.
+     *
+     * Выключена — канал из лаунчера удаляется и больше не публикуется
+     * (требование Александра 06.11.2026: функционал должен отключаться).
+     */
+    val watchNextEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[WATCH_NEXT_ENABLED_KEY] ?: DEFAULT_WATCH_NEXT_ENABLED
+    }
+
+    /**
+     * Сколько карточек показывать в ленте «Сейчас идёт».
+     *
+     * Значение — из [WATCH_NEXT_LIMIT_CHOICES]: чем больше карточек, тем больше места лента
+     * занимает на домашнем экране приставки.
+     */
+    val watchNextLimit: Flow<Int> = dataStore.data.map { preferences ->
+        preferences[WATCH_NEXT_LIMIT_KEY] ?: DEFAULT_WATCH_NEXT_LIMIT
+    }
+
     /** Язык звуковой дорожки по умолчанию. */
     val audioLanguage: Flow<AudioLanguage> = dataStore.data.map { preferences ->
         preferences[AUDIO_LANGUAGE_KEY]
@@ -242,6 +262,29 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
     }
 
     /**
+     * Включает или выключает ленту «Сейчас идёт» на домашнем экране.
+     *
+     * @param enabled показывать ли канал приложения в лаунчере.
+     */
+    suspend fun setWatchNextEnabled(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[WATCH_NEXT_ENABLED_KEY] = enabled }
+    }
+
+    /**
+     * Сохраняет, сколько карточек показывать в ленте «Сейчас идёт».
+     *
+     * @param limit значение из [WATCH_NEXT_LIMIT_CHOICES]; вне диапазона приводится к краю.
+     */
+    suspend fun setWatchNextLimit(limit: Int) {
+        dataStore.edit { preferences ->
+            preferences[WATCH_NEXT_LIMIT_KEY] = limit.coerceIn(
+                WATCH_NEXT_LIMIT_CHOICES.first(),
+                WATCH_NEXT_LIMIT_CHOICES.last(),
+            )
+        }
+    }
+
+    /**
      * Сохраняет язык звука по умолчанию.
      *
      * @param language выбранный язык.
@@ -343,6 +386,15 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
         /** Глубина архива по умолчанию: у iedem архив до 72 часов. */
         const val DEFAULT_ARCHIVE_DEPTH_HOURS = 72
 
+        /** Лента «Сейчас идёт» включена по умолчанию: её видно на домашнем экране приставки. */
+        const val DEFAULT_WATCH_NEXT_ENABLED = true
+
+        /** Сколько карточек в ленте по умолчанию. */
+        const val DEFAULT_WATCH_NEXT_LIMIT = 10
+
+        /** Варианты количества карточек ленты, которые предлагаются в настройках. */
+        val WATCH_NEXT_LIMIT_CHOICES = listOf(5, 10, 15, 20)
+
         /** Варианты глубины архива: от суток до семи суток, шаг в сутки. */
         val ARCHIVE_DEPTH_CHOICES = listOf(24, 48, 72, 96, 120, 144, 168)
 
@@ -353,6 +405,8 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
         private val RETRY_KEY = intPreferencesKey("player_retry_attempts")
         private val EPG_WINDOW_KEY = intPreferencesKey("epg_window_hours")
         private val DATA_SAVER_KEY = booleanPreferencesKey("data_saver")
+        private val WATCH_NEXT_ENABLED_KEY = booleanPreferencesKey("watch_next_enabled")
+        private val WATCH_NEXT_LIMIT_KEY = intPreferencesKey("watch_next_limit")
         private val AUDIO_LANGUAGE_KEY = stringPreferencesKey("player_audio_language")
         private val ARCHIVE_DEPTH_KEY = intPreferencesKey("archive_depth_hours")
         private val DIRECT_STREAM_KEY = booleanPreferencesKey("direct_stream")

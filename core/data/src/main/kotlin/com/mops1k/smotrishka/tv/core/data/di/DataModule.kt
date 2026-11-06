@@ -37,6 +37,8 @@ import com.mops1k.smotrishka.tv.core.data.SmotrishkaDatabase
 import com.mops1k.smotrishka.tv.core.data.SourceRepository
 import com.mops1k.smotrishka.tv.core.data.SyncStatusStore
 import com.mops1k.smotrishka.tv.core.data.UpdateScheduler
+import com.mops1k.smotrishka.tv.core.data.watchnext.TvProviderWatchNextSync
+import com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextSync
 import com.mops1k.smotrishka.tv.core.playlist.M3uParser
 import com.mops1k.smotrishka.tv.core.playlist.XmltvParser
 import dagger.Module
@@ -252,6 +254,12 @@ object DataModule {
 
     @Provides
     fun clock(): java.time.Clock = java.time.Clock.systemUTC()
+
+    /** Лента «Сейчас идёт» на домашнем экране Android TV. */
+    @Provides
+    @Singleton
+    fun watchNextSync(@ApplicationContext context: Context): WatchNextSync =
+        TvProviderWatchNextSync(context)
 
     @Provides
     @Singleton
