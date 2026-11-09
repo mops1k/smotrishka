@@ -80,6 +80,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -632,11 +633,26 @@ private fun PlayerContent(
         return
     }
 
-    // Свёрнутое приложение не должно продолжать звук: уход в фон ставит паузу.
+    // Свёрнутое приложение не должно продолжать звук и качать поток: уход в фон останавливает,
+    // возврат запускает заново с прямого эфира (замечание Александра 09.11.2026).
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, player) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) player.pause()
+            when (event) {
+                Lifecycle.Event.ON_STOP -> {
+                    player.pause()
+                    player.stop()
+                }
+
+                Lifecycle.Event.ON_START -> {
+                    if (player.playbackState == androidx.media3.common.Player.STATE_IDLE) {
+                        player.prepare()
+                        player.play()
+                    }
+                }
+
+                else -> Unit
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -986,6 +1002,44 @@ private fun PlayerContent(
                         }
                         true
                     }
+                } else if (event.key == Key.ChannelUp || event.key == Key.ChannelDown) {
+                    // Аппаратные кнопки «канал вверх/вниз» на пульте: переключают канал всегда,
+                    // открыт OSD или закрыт (замечание Александра 09.11.2026).
+                    if (channelsVisible || recentsVisible || programmeVisible) {
+                        false
+                    } else {
+                        if (event.type == KeyEventType.KeyDown) {
+                            val target =
+                                if (event.key == Key.ChannelUp) neighbours.first else neighbours.second
+                            target?.let(onSwitchChannel)
+                        }
+                        true
+                    }
+                } else if (
+                    event.key == Key.MediaPlayPause ||
+                    event.key == Key.MediaPlay ||
+                    event.key == Key.MediaPause
+                ) {
+                    // Медиа-кнопки пульта: воспроизведение и пауза работают в любом состоянии OSD
+                    // (замечание Александра 09.11.2026).
+                    if (event.type == KeyEventType.KeyDown) {
+                        playerRef?.let { active ->
+                            when (event.key) {
+                                Key.MediaPlay -> {
+                                    active.play()
+                                    if (!controls.state.value.playing) controls.togglePlayback()
+                                }
+
+                                Key.MediaPause -> {
+                                    active.pause()
+                                    if (controls.state.value.playing) controls.togglePlayback()
+                                }
+
+                                else -> togglePlayback(active, controls)
+                            }
+                        }
+                    }
+                    true
                 } else {
                     // Пока список открыт, OSD не показываем: он рисуется поверх и закрывает его.
                     if (!channelsVisible && !recentsVisible) controls.onInteraction()
@@ -1076,7 +1130,15 @@ private fun PlayerContent(
                         color = Color.White.copy(alpha = 0.7f),
                     )
                 } else {
-                    LazyColumn(state = programmeState, modifier = Modifier.weight(1f)) {
+                    // Две колонки: список передач слева, описание выбранной справа
+                    // (решение Александра 09.11.2026).
+                    var detailRow by remember {
+                        mutableStateOf(
+                            schedule.firstOrNull { it.status == ProgrammeStatus.NOW } ?: schedule.first(),
+                        )
+                    }
+                    Row(modifier = Modifier.weight(1f)) {
+                    LazyColumn(state = programmeState, modifier = Modifier.weight(0.56f)) {
                         itemsIndexed(
                             items = schedule,
                             key = { _, row -> "${row.programme.start}_${row.programme.title}" },
@@ -1095,7 +1157,10 @@ private fun PlayerContent(
                                             else -> Color.Transparent
                                         },
                                     )
-                                    .onFocusChanged { rowFocused = it.isFocused }
+                                    .onFocusChanged {
+                                        rowFocused = it.isFocused
+                                        if (it.isFocused) detailRow = row
+                                    }
                                     .then(if (index == nowIndex) Modifier.focusRequester(currentProgramme) else Modifier)
                                     .clickable {
                                         if (!canOpen) {
@@ -1147,6 +1212,13 @@ private fun PlayerContent(
                                 )
                             }
                         }
+                    }
+                    ProgrammeDetails(
+                        row = detailRow,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 32.dp),
+                    )
                     }
                 }
             }
@@ -1727,6 +1799,9 @@ fun LivePreview(
     bufferSeconds: Int,
     modifier: Modifier = Modifier,
     fallback: @Composable () -> Unit = {},
+    // Сообщает наружу, есть ли кадры потока: пока их нет, плашка «Сейчас в эфире»
+    // показываться не должна (замечание Александра 09.11.2026).
+    onFramesReady: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1738,6 +1813,11 @@ fun LivePreview(
     // Смена канала — только новый источник: сам плеер остаётся живым.
     LaunchedEffect(url) {
         ready = false
+        onFramesReady(false)
+        // Старый кадр не должен висеть, пока готовится новый поток: гасим прежнюю сессию,
+        // иначе Live Preview показывает предыдущий канал (замечание Александра 09.11.2026).
+        player.stop()
+        player.clearMediaItems()
         player.setMediaItem(PlayerLive.mediaItem(url))
         player.prepare()
         player.playWhenReady = true
@@ -1748,6 +1828,7 @@ fun LivePreview(
         val listener = object : Player.Listener {
             override fun onRenderedFirstFrame() {
                 ready = true
+                onFramesReady(true)
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -1769,6 +1850,31 @@ fun LivePreview(
             player.removeListener(listener)
             player.release()
         }
+    }
+
+    // В фоне превью не качает поток и не играет звук; на возврате запускается с живого края
+    // (замечание Александра 09.11.2026).
+    val previewLifecycle = LocalLifecycleOwner.current
+    DisposableEffect(previewLifecycle, player) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> {
+                    player.pause()
+                    player.stop()
+                }
+
+                Lifecycle.Event.ON_START -> {
+                    if (player.playbackState == Player.STATE_IDLE) {
+                        player.prepare()
+                        player.play()
+                    }
+                }
+
+                else -> Unit
+            }
+        }
+        previewLifecycle.lifecycle.addObserver(observer)
+        onDispose { previewLifecycle.lifecycle.removeObserver(observer) }
     }
 
     // Сторож зависания: превью не должно навсегда остаться на одном кадре или чёрным.
@@ -1796,7 +1902,11 @@ fun LivePreview(
             fallback()
         }
         AndroidView(
-            modifier = Modifier.fillMaxSize(),
+            // Пока новый поток не отрисовал первый кадр, видео скрыто: иначе поверх
+            // заглушки виден последний кадр прежнего канала.
+            modifier = Modifier
+                .fillMaxSize()
+                .alpha(if (ready) 1f else 0f),
             factory = { viewContext ->
                 // TextureView: SurfaceView в Compose на этом устройстве не получает кадр
                 // до касания экрана, и картинка теряется при пересоздании вьюхи.
@@ -1921,7 +2031,9 @@ private fun ImmersiveMode() {
             }
             onDispose {
                 job.cancel()
-                controller.show(WindowInsetsCompat.Type.systemBars())
+                // Панели НЕ возвращаем: приложение полноэкранное на всех экранах, и именно
+                // этот show() показывал статусные строки после выхода из плеера
+                // (указание Александра 09.11.2026).
             }
         }
     }
@@ -2003,6 +2115,45 @@ private const val IMMERSIVE_REAPPLY_MS = 500L
 
 /** Как часто перепроверяем передачу для OSD. */
 private const val OSD_PROGRAMME_TICK_MS = 20_000L
+
+/**
+ * Правая половина оверлея телепрограммы: название, время и описание выбранной передачи.
+ *
+ * @param row выбранная строка, `null` — показывать нечего;
+ * @param modifier размеры панели.
+ */
+@Composable
+private fun ProgrammeDetails(row: ProgrammeRowUi?, modifier: Modifier = Modifier) {
+    if (row == null) return
+    val formatter = remember { java.time.format.DateTimeFormatter.ofPattern("HH:mm") }
+    val zone = remember { ZoneId.systemDefault() }
+    Column(modifier = modifier.fillMaxHeight()) {
+        Text(
+            text = row.programme.title,
+            style = MaterialTheme.typography.titleMedium,
+            color = Color.White,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = formatter.format(row.programme.start.atZone(zone)) +
+                " – " +
+                formatter.format(row.programme.end.atZone(zone)),
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.65f),
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = row.programme.description?.takeIf { it.isNotBlank() } ?: "Описания нет",
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (row.programme.description.isNullOrBlank()) {
+                Color.White.copy(alpha = 0.45f)
+            } else {
+                Color.White.copy(alpha = 0.9f)
+            },
+        )
+    }
+}
 
 /** Запас, при котором начинаем показ эфира из буфера: реальный запас, а не «загружено позади». */
 private const val START_BUFFER_SECONDS = 20L

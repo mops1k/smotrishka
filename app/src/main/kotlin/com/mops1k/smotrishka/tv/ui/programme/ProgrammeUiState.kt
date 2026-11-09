@@ -38,6 +38,7 @@ sealed interface ProgrammeUiState {
  * Передача в ленте программы.
  *
  * @param title название;
+ * @param description описание передачи из гида, если провайдер его отдал;
  * @param start начало;
  * @param end конец;
  * @param isCurrent идёт ли прямо сейчас;
@@ -46,6 +47,7 @@ sealed interface ProgrammeUiState {
  */
 data class ProgrammeUi(
     val title: String,
+    val description: String? = null,
     val start: Instant,
     val end: Instant,
     val isCurrent: Boolean,

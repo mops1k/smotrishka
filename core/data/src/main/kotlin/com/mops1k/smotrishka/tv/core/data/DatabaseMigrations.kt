@@ -68,4 +68,11 @@ internal object DatabaseMigrations {
             )
         }
     }
+
+    /** 5 → 6: язык канала (`tvg-language` или языковая группа) для фильтра списков. */
+    val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            database.execSQL("ALTER TABLE `channels` ADD COLUMN `language` TEXT")
+        }
+    }
 }

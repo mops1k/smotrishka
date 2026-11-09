@@ -9,6 +9,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import java.time.Instant
+import java.time.ZoneId
 
 /**
  * Настройки воспроизведения, рассчитанные на слабый интернет.
@@ -37,6 +39,51 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
     val osdHideSeconds: Flow<Int> = dataStore.data.map { preferences ->
         preferences[OSD_HIDE_KEY] ?: DEFAULT_OSD_HIDE_SECONDS
     }
+
+    /**
+     * Общее смещение гида, часы.
+     *
+     * У части провайдеров сетка отдаётся в чужом часовом поясе: тогда все передачи сдвинуты
+     * одинаково. Сдвиг отдельного канала ([epgShifts]) важнее общего (решение Александра
+     * 09.11.2026). Значение по умолчанию — ноль; пояс устройства учитывается один раз при
+     * старте приложения ([applyAutoEpgShiftOnce]), чтобы не сдвигать сетку молча в тестах.
+     */
+    val globalEpgShift: Flow<Int> = dataStore.data.map { preferences ->
+        (preferences[GLOBAL_EPG_SHIFT_KEY] ?: 0).coerceIn(-MAX_EPG_SHIFT_HOURS, MAX_EPG_SHIFT_HOURS)
+    }
+
+    /**
+     * Задаёт общее смещение гида.
+     *
+     * @param hours смещение в часах, допустимо −12…+12 (0 — без смещения).
+     */
+    suspend fun setGlobalEpgShift(hours: Int) {
+        dataStore.edit { preferences ->
+            preferences[GLOBAL_EPG_SHIFT_KEY] = hours.coerceIn(-MAX_EPG_SHIFT_HOURS, MAX_EPG_SHIFT_HOURS)
+        }
+    }
+
+    /**
+     * Один раз подставляет смещение по поясу устройства.
+     *
+     * Провайдеры часто отдают XMLTV без часового пояса, и время читается как UTC: без поправки
+     * все передачи уезжают на смещение пояса (на планшете в Москве — на +3 часа). Поправка
+     * ставится только пока пользователь не задал смещение сам и только один раз — иначе ручной
+     * выбор затирался бы при каждом запуске.
+     *
+     * @param hours смещение по умолчанию, по умолчанию — минус пояс устройства.
+     */
+    suspend fun applyAutoEpgShiftOnce(hours: Int = autoEpgShiftHours()) {
+        dataStore.edit { preferences ->
+            if (preferences[EPG_SHIFT_AUTO_KEY] == true) return@edit
+            preferences[EPG_SHIFT_AUTO_KEY] = true
+            if (preferences[GLOBAL_EPG_SHIFT_KEY] == null) preferences[GLOBAL_EPG_SHIFT_KEY] = hours
+        }
+    }
+
+    /** Смещение гида по умолчанию: минус смещение пояса устройства в часах. */
+    private fun autoEpgShiftHours(): Int =
+        -(ZoneId.systemDefault().rules.getOffset(Instant.now()).totalSeconds / 3600)
 
     /**
      * Сдвиг времени гида по каналам, в часах.
@@ -94,6 +141,60 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
     /** Экономить трафик: без автозапуска превью и без логотипов. */
     val dataSaver: Flow<Boolean> = dataStore.data.map { preferences ->
         preferences[DATA_SAVER_KEY] ?: false
+    }
+
+    /**
+     * Выбранный язык каналов, `null` — показывать все.
+     *
+     * Фильтр работает по `tvg-language` плейлиста (решение Александра 09.11.2026).
+     */
+    val channelLanguage: Flow<String?> = dataStore.data.map { preferences ->
+        preferences[CHANNEL_LANGUAGE_KEY]?.takeIf(String::isNotBlank)
+    }
+
+    /**
+     * Задаёт язык каналов для списков.
+     *
+     * @param language язык из плейлиста, `null` — все каналы.
+     */
+    suspend fun setChannelLanguage(language: String?) {
+        dataStore.edit { preferences ->
+            val value = language?.takeIf(String::isNotBlank)
+            if (value == null) preferences.remove(CHANNEL_LANGUAGE_KEY) else preferences[CHANNEL_LANGUAGE_KEY] = value
+        }
+    }
+
+    /** Показывать каналы без метки языка: иначе они скрываются вместе с чужими языками. */
+    val showUnlabelledChannels: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[SHOW_UNLABELLED_KEY] ?: true
+    }
+
+    /**
+     * Определять язык канала по названию (`... HD ES`, `... US`).
+     *
+     * По умолчанию выключено: у взрослых каналов хвосты есть, но язык там не важен
+     * (решение Александра 09.11.2026).
+     */
+    val languageFromName: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[LANGUAGE_FROM_NAME_KEY] ?: false
+    }
+
+    /**
+     * Включает определение языка по названию канала.
+     *
+     * @param enabled разбирать хвост имени канала как язык.
+     */
+    suspend fun setLanguageFromName(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[LANGUAGE_FROM_NAME_KEY] = enabled }
+    }
+
+    /**
+     * Включает показ каналов без метки языка.
+     *
+     * @param enabled показывать каналы, у которых `tvg-language` не задан.
+     */
+    suspend fun setShowUnlabelledChannels(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[SHOW_UNLABELLED_KEY] = enabled }
     }
 
     /**
@@ -361,6 +462,9 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
     companion object {
         const val DEFAULT_BUFFER_SECONDS = 5
 
+        /** Выбор «Основные» в фильтре языка: показывать только каналы без метки языка. */
+        const val UNLABELLED_LANGUAGE = "unlabelled"
+
         /** Варианты, которые предлагаются в настройках. */
         val BUFFER_CHOICES = listOf(2, 5, 10, 20)
 
@@ -410,10 +514,20 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
         private val BUFFER_KEY = intPreferencesKey("player_buffer_seconds")
         private val OSD_HIDE_KEY = intPreferencesKey("player_osd_hide_seconds")
         private val EPG_SHIFTS_KEY = stringSetPreferencesKey("epg_shifts_by_channel")
+        private val GLOBAL_EPG_SHIFT_KEY = intPreferencesKey("epg_global_shift_hours")
+
+        /** Признак, что авто-смещение по поясу уже применялось: второй раз не подставляем. */
+        private val EPG_SHIFT_AUTO_KEY = booleanPreferencesKey("epg_shift_auto_applied")
         private val QUALITY_KEY = stringPreferencesKey("player_video_quality")
         private val RECOVERY_DELAY_KEY = intPreferencesKey("player_recovery_max_delay_seconds")
         private val EPG_WINDOW_KEY = intPreferencesKey("epg_window_hours")
         private val DATA_SAVER_KEY = booleanPreferencesKey("data_saver")
+
+        private val CHANNEL_LANGUAGE_KEY = stringPreferencesKey("channel_language")
+
+        private val SHOW_UNLABELLED_KEY = booleanPreferencesKey("show_unlabelled_channels")
+
+        private val LANGUAGE_FROM_NAME_KEY = booleanPreferencesKey("language_from_name")
         private val WATCH_NEXT_ENABLED_KEY = booleanPreferencesKey("watch_next_enabled")
         private val WATCH_NEXT_LIMIT_KEY = intPreferencesKey("watch_next_limit")
         private val AUDIO_LANGUAGE_KEY = stringPreferencesKey("player_audio_language")

@@ -38,9 +38,13 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mops1k.smotrishka.tv.core.model.ChannelId
+import kotlinx.coroutines.delay
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+
+/** Как часто пересобирается список передач: передача «сейчас» должна уезжать вовремя. */
+private const val PROGRAMME_TICK_MS = 60_000L
 
 /**
  * Экран программы канала: прошедшие передачи, текущая и будущие.
@@ -120,6 +124,14 @@ fun ProgrammeScreen(
                 }
 
                 val listState = rememberLazyListState()
+                // Передача сменяется по ходу эфира: раз в минуту пересобираем список,
+                // иначе «сейчас» остаётся на передачи, которая уже закончилась.
+                LaunchedEffect(current.channelId) {
+                    while (true) {
+                        delay(PROGRAMME_TICK_MS)
+                        viewModel.refresh()
+                    }
+                }
                 // Открываем список на передаче, которая идёт сейчас: пользователь выбирает,
                 // отталкиваясь от неё, а не от начала суток.
                 LaunchedEffect(current.channelId, current.items.size) {
@@ -178,15 +190,28 @@ private fun ProgrammeRow(item: ProgrammeUi, onClick: () -> Unit) {
             color = textColor,
         )
         Spacer(Modifier.width(12.dp))
-        Text(
-            text = item.title,
-            style = MaterialTheme.typography.bodyLarge,
-            color = textColor,
-            fontWeight = if (item.isCurrent) FontWeight.Medium else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = item.title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = textColor,
+                fontWeight = if (item.isCurrent) FontWeight.Medium else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            // Описание — у текущей передачи: именно её обычно смотрят (замечание
+            // Александра 09.11.2026). Провайдер отдаёт его не всегда.
+            if (item.isCurrent && !item.description.isNullOrBlank()) {
+                Text(
+                    text = item.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = textColor,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
         if (item.isCurrent) {
             Text(
                 text = "сейчас",

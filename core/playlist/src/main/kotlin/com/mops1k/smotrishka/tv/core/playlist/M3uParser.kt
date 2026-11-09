@@ -30,6 +30,14 @@ import java.util.Locale
 class M3uParser {
 
     /**
+     * Определять язык канала по названию (`... HD ES`, `... US`).
+     *
+     * Соответствует настройке «Определять язык по названию канала» (по умолчанию выключена):
+     * у взрослых каналов хвосты есть, но язык там не важен (решение 09.11.2026).
+     */
+    var languageFromName: Boolean = false
+
+    /**
      * Разбирает текст плейлиста.
      *
      * @param text содержимое M3U-файла;
@@ -183,6 +191,13 @@ class M3uParser {
             logoUrl = attributes["tvg-logo"]?.trim()?.takeIf(String::isNotEmpty),
             categoryId = categoryId,
             epgId = attributes["tvg-id"]?.trim()?.takeIf(String::isNotEmpty),
+            // Язык: явная метка важнее группы, группа — важнее хвоста имени (решение 09.11.2026).
+            language = ChannelLanguage.resolve(
+                tvgLanguage = attributes["tvg-language"],
+                group = group,
+                name = name,
+                byName = languageFromName,
+            ),
             archive = buildArchive(attributes),
             headers = buildHeaders(headers),
         )

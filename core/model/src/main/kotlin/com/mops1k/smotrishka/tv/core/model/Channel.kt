@@ -19,6 +19,8 @@ data class Channel(
     val logoUrl: String? = null,
     val categoryId: String? = null,
     val epgId: String? = null,
+    // Язык озвучки канала из плейлиста (`tvg-language`): по нему работает фильтр языка.
+    val language: String? = null,
     val archive: ArchiveInfo? = null,
     val headers: StreamHeaders? = null,
 )

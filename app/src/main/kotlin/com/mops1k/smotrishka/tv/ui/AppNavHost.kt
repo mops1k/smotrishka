@@ -174,7 +174,9 @@ fun AppNavHost(
                     ),
                 ) {
                     PlayerScreen(
-                        onBack = { navController.popBackStack() },
+                        // «Назад» из плеера всегда ведёт к списку каналов: повторное нажатие
+                        // не должно выкидывать приложение в пустой экран.
+                        onBack = { navController.backToHome() },
                         // Переключение канала заменяет текущий экран плеера, иначе «назад» отматывает
                         // все просмотренные каналы по одному вместо возврата в список.
                         onGoLive = { id ->
@@ -189,7 +191,12 @@ fun AppNavHost(
                         },
                         onOpenProgramme = { channelId -> navController.navigate(Route.programme(channelId)) },
                         onOpenArchive = { channelId, start ->
-                            navController.navigate(Route.playerArchive(channelId, start.epochSecond))
+                            // Архив открывается вместо текущего плеера, а не поверх него:
+                            // иначе «назад» отматывает цепочку каналов по одному, а должен
+                            // сразу возвращать к списку каналов с превью.
+                            navController.navigate(Route.playerArchive(channelId, start.epochSecond)) {
+                                popUpTo(navController.currentDestination?.id ?: 0) { inclusive = true }
+                            }
                         },
                     )
                 }
@@ -207,9 +214,15 @@ fun AppNavHost(
                             } else {
                                 Route.player(channelId)
                             }
-                            navController.navigate(target)
+                            // Плеер открывается вместо экрана программы: «назад» из плеера
+                            // возвращает к списку каналов с превью, а не на программу.
+                            navController.navigate(target) {
+                                popUpTo(Route.HOME)
+                            }
                         },
-                        onBack = { navController.popBackStack() },
+                        // «Назад» с экрана программы — всегда к списку каналов (замечание
+                        // Александра 09.11.2026).
+                        onBack = { navController.backToHome() },
                     )
                 }
 
@@ -265,5 +278,27 @@ fun AppNavHost(
                 onPendingChannelConsumed()
             }
         }
+    }
+}
+
+/**
+ * Возвращает на главный экран, не оставляя пустой стек.
+ *
+ * Раньше «назад» из плеера делал обычный `popBackStack()`: при повторном нажатии он выбивал
+ * и главный экран, и приложение показывало пустое серое окно (замечание Александра
+ * 09.11.2026). Здесь вторая попытка не разрушает стек: если главного экрана уже нет,
+ * он восстанавливается.
+ */
+private fun NavHostController.backToHome() {
+    android.util.Log.d(
+        "SmotrishkaNav",
+        "назад: текущий=${currentDestination?.route}",
+    )
+    if (popBackStack(Route.HOME, inclusive = false)) return
+    if (currentDestination?.route == Route.HOME) return
+    // Стек пуст или начальный экран другой — собираем главный экран заново.
+    navigate(Route.HOME) {
+        popUpTo(graph.id) { inclusive = true }
+        launchSingleTop = true
     }
 }

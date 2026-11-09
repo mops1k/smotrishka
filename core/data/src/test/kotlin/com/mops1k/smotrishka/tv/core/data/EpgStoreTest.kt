@@ -44,11 +44,17 @@ class EpgStoreTest {
         database.close()
     }
 
-    private fun programme(title: String, start: Instant, end: Instant) = Programme(
+    private fun programme(
+        title: String,
+        start: Instant,
+        end: Instant,
+        description: String? = null,
+    ) = Programme(
         channelId = "one",
         title = title,
         start = start,
         end = end,
+        description = description,
     )
 
     private fun epg(vararg programmes: Programme) = Epg(
@@ -130,6 +136,23 @@ class EpgStoreTest {
 
         val left = store.programmes("one", now.minusSeconds(30 * 24 * 3600), now.plusSeconds(30 * 24 * 3600))
         assertThat(left).isEmpty()
+    }
+
+    @Test
+    fun `дополнение дозаполняет описание, не меняя название и время`() = runTest {
+        // Провайдер отдал передачу без описания, общий гид знает описание той же передачи.
+        store.replace(epg(programme("Провайдер", now.minusSeconds(3600), now)))
+
+        store.merge(
+            epg(
+                programme("Чужое название", now.minusSeconds(3600), now, description = "Описание из гида"),
+            ),
+        )
+
+        val programmes = store.programmes("one", now.minusSeconds(7200), now.plusSeconds(7200))
+
+        assertThat(programmes.single().title).isEqualTo("Провайдер")
+        assertThat(programmes.single().description).isEqualTo("Описание из гида")
     }
 
     @Test

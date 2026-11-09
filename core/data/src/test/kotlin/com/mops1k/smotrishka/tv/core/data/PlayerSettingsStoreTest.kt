@@ -179,6 +179,44 @@ class PlayerSettingsStoreTest {
     }
 
     @Test
+    fun `общее смещение гида по умолчанию нулевое`() = runTest {
+        // Молча сдвигать сетку нельзя: смещение по поясу ставит приложение один раз при старте.
+        assertThat(store.globalEpgShift.first()).isEqualTo(0)
+    }
+
+    @Test
+    fun `авто-смещение по поясу ставится один раз и не затирает ручной выбор`() = runTest {
+        store.applyAutoEpgShiftOnce(hours = -3)
+        assertThat(store.globalEpgShift.first()).isEqualTo(-3)
+
+        // Второй запуск не должен ничего менять или сдвигать снова.
+        store.applyAutoEpgShiftOnce(hours = -5)
+        assertThat(store.globalEpgShift.first()).isEqualTo(-3)
+
+        // Ручной выбор важнее авто-подстановки.
+        store.setGlobalEpgShift(2)
+        store.applyAutoEpgShiftOnce(hours = -3)
+        assertThat(store.globalEpgShift.first()).isEqualTo(2)
+    }
+
+    @Test
+    fun `общее смещение гида сохраняется и ограничивается`() = runTest {
+        store.setGlobalEpgShift(3)
+        assertThat(store.globalEpgShift.first()).isEqualTo(3)
+
+        // Предел тот же, что у поканального сдвига: больше провайдеры не врут.
+        store.setGlobalEpgShift(99)
+        assertThat(store.globalEpgShift.first()).isEqualTo(PlayerSettingsStore.MAX_EPG_SHIFT_HOURS)
+
+        store.setGlobalEpgShift(-3)
+        assertThat(store.globalEpgShift.first()).isEqualTo(-3)
+
+        // Явно выбранный ноль важнее автоматического значения: это решение пользователя.
+        store.setGlobalEpgShift(0)
+        assertThat(store.globalEpgShift.first()).isEqualTo(0)
+    }
+
+    @Test
     fun `лента на домашнем экране включена по умолчанию`() = runTest {
         assertThat(store.watchNextEnabled.first()).isTrue()
     }

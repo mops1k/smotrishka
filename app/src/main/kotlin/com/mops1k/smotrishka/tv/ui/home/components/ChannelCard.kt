@@ -41,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -121,7 +122,13 @@ fun ChannelCard(
     onChangeEpgShift: ((Int) -> Unit)? = null,
     // «Вверх» с верхних кнопок карточки ведёт на кнопку поиска в шапке.
     upTarget: FocusRequester? = null,
+    // Адрес превью: с сердечка «вверх» ведёт сначала сюда, а с превью — на кнопку поиска.
+    previewFocus: FocusRequester? = null,
 ) {
+    // Блок превью есть всегда: без живого кадра в нём логотип, но «вниз» с поиска и «вверх»
+    // с сердечка должны приводить именно сюда (замечание Александра 09.11.2026).
+    val previewShown = previewFocus != null
+    val heartUpTarget = if (previewShown && previewFocus != null) previewFocus else upTarget
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -148,7 +155,7 @@ fun ChannelCard(
             onToggleFavorite = onToggleFavorite,
             onCollapseProgramme = onCollapseProgramme,
             leftTarget = leftTarget,
-            upTarget = upTarget,
+            upTarget = heartUpTarget,
         )
 
         if (programmeOpen) {
@@ -223,6 +230,8 @@ fun ChannelCard(
                 narrow = narrow,
                 live = channel.nowTitle != null,
                 onWatch = onWatch,
+                previewFocus = previewFocus,
+                previewUpTarget = upTarget,
             )
                 }
                     Spacer(Modifier.weight(1f))
@@ -257,6 +266,8 @@ fun ChannelCard(
                 narrow = narrow,
                 live = channel.nowTitle != null,
                 onWatch = onWatch,
+                previewFocus = previewFocus,
+                previewUpTarget = upTarget,
             )
                 Column(
                     modifier = if (programmeOpen) {
@@ -294,6 +305,9 @@ private fun ChannelVisual(
     narrow: Boolean,
     live: Boolean,
     onWatch: () -> Unit,
+    // Адрес превью для фокуса и его «вверх»: с сердечка — сюда, отсюда — на поиск.
+    previewFocus: FocusRequester? = null,
+    previewUpTarget: FocusRequester? = null,
 ) {
     val height = when {
         compact -> TvDimens.cardVisualCompact
@@ -306,6 +320,11 @@ private fun ChannelVisual(
         else -> TvDimens.logoLarge
     }
     val logoShape = RoundedCornerShape(if (compact) 19.dp else TvRadius.logoLarge)
+    // Фокус стоит на всём блоке превью: плитка с живым кадром есть не всегда (трафик,
+    // буфер), и тогда «вниз» с поиска некуда было идти (замечание Александра 09.11.2026).
+    var blockFocused by remember { mutableStateOf(false) }
+    // Плашка «Сейчас в эфире» видна только когда в превью пошли кадры потока.
+    var framesReady by remember { mutableStateOf(false) }
     val logoText = when {
         compact -> LogoMediumText
         narrow -> LogoMediumText
@@ -318,6 +337,24 @@ private fun ChannelVisual(
             // С живым превью визуал держит пропорции кадра и занимает верх карточки целиком:
             // раньше видео болталось по центру блока, и превью выглядело «посреди карточки».
             .then(if (livePreview) Modifier.aspectRatio(16f / 9f) else Modifier.heightIn(min = height))
+            // Адрес фокуса превью: сюда ведёт «вниз» с поиска и «вверх» с сердечка.
+            .then(if (previewFocus != null) Modifier.focusRequester(previewFocus) else Modifier)
+            .then(
+                if (previewUpTarget != null) {
+                    Modifier.focusProperties { up = previewUpTarget }
+                } else {
+                    Modifier
+                },
+            )
+            .onFocusChanged { blockFocused = it.isFocused }
+            .clickable { onWatch() }
+            .then(
+                if (blockFocused) {
+                    Modifier.border(3.dp, TvColors.accent, RoundedCornerShape(TvRadius.panel))
+                } else {
+                    Modifier
+                },
+            )
             .drawBehind {
                 val step = 32.dp.toPx()
                 val lineColor = Color(0x04FFFFFF)
@@ -369,27 +406,13 @@ private fun ChannelVisual(
             showImage = showLogo,
         )
         if (livePreview && !LocalPreviewSuppressed.current) {
-            // Фокус может попасть и на превью: плашка и обводка показывают, где пульт.
-            var previewFocused by remember { mutableStateOf(false) }
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .onFocusChanged { previewFocused = it.isFocused }
-                    .clickable { onWatch() }
-                    // Фокус на превью: акцентная обводка поверх кадра — видно, что пульт здесь.
-                    .then(
-                        if (previewFocused) {
-                            Modifier.border(3.dp, TvColors.accent, RoundedCornerShape(TvRadius.panel))
-                        } else {
-                            Modifier
-                        },
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
+            Box(modifier = Modifier.fillMaxSize()) {
                 LivePreview(
                     url = streamUrl,
                     bufferSeconds = bufferSeconds,
                     modifier = Modifier.fillMaxSize(),
+                    // Кадры пошли — можно показывать плашку «Сейчас в эфире».
+                    onFramesReady = { framesReady = it },
                     fallback = {
                         ChannelLogo(
                             name = name,
@@ -409,7 +432,9 @@ private fun ChannelVisual(
                 )
             }
         }
-        if (live && !narrow) {
+        // Плашка «Сейчас в эфире» — только когда реально идут кадры: пока виден логотип,
+        // её быть не должно (замечание Александра 09.11.2026).
+        if (live && !narrow && framesReady) {
             LivePlaque(modifier = Modifier.align(Alignment.BottomStart).padding(17.dp))
         }
     }
@@ -638,6 +663,18 @@ private fun NowBlock(
             }
         }
         Spacer(Modifier.height(11.dp))
+        // Описание текущей передачи: две-три строки, дальше обрезаем — превью должно
+        // оставаться компактным (решение Александра 09.11.2026).
+        if (!channel.nowDescription.isNullOrBlank()) {
+            Text(
+                text = channel.nowDescription,
+                style = TvType.caption,
+                color = TvColors.muted,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(9.dp))
+        }
         val fraction = if (channel.nowStart != null && channel.nowEnd != null) {
             TextFormat.progressFraction(channel.nowStart, channel.nowEnd, now)
         } else {

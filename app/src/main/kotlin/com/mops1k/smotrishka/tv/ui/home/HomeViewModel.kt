@@ -104,6 +104,15 @@ class HomeViewModel @Inject constructor(
 
     /** Ручной сдвиг гида по каналам, часы: у части каналов провайдер отдаёт сетку со сдвигом. */
     private var epgShifts: Map<String, Int> = emptyMap()
+
+    // Общее смещение гида: применяется к каналам без своего сдвига.
+    private var globalEpgShift: Int = 0
+
+    /** Выбранный язык каналов, `null` — все языки. */
+    private var channelLanguage: String? = null
+
+    /** Пользователь сам выбрал категорию: за просмотром её больше не переключаем. */
+    private var userChoseCategory: Boolean = false
     // Показываем список каналов; «назад» из него открывает панель категорий.
     private var showChannels: Boolean = true
 
@@ -126,6 +135,14 @@ class HomeViewModel @Inject constructor(
     // Пересборки не должны накладываться: каждая идёт по всем каналам, и несколько
     // параллельных проходов держали экран в «Загружаем каналы…».
     private var refreshJob: Job? = null
+
+    /**
+     * Экран списка сейчас на виду.
+     *
+     * Пока открыт плеер, главный экран не в композиции: пересчитывать каталог и программу
+     * незачем, это только грузит устройство (указание Александра 09.11.2026).
+     */
+    private var screenVisible: Boolean = true
 
     /**
      * Канал, подтверждённый OK: по нему показывается видео в карточке.
@@ -211,7 +228,7 @@ class HomeViewModel @Inject constructor(
                 }
             }
             // После возврата из плеера карточка показывает канал, который только что смотрели.
-            recentChannels.channels.first().firstOrNull()?.let { selectedChannelId = ChannelId(it) }
+            followLastWatched()
             val saved = settingsStore.lastCategory.first()
             if (saved != null && saved.isNotEmpty()) {
                 selectedCategoryId = if (saved == PlayerSettingsStore.ALL_CATEGORY) null else saved
@@ -231,7 +248,9 @@ class HomeViewModel @Inject constructor(
             settingsStore.epgShifts.collect { shifts ->
                 if (shifts == epgShifts) return@collect
                 epgShifts = shifts
-                refreshVisible()
+                // Сдвиг меняет названия передач в карточках: нужен полный проход, а не только
+                // перерисовка видимого списка (замечание Александра 09.11.2026).
+                refresh(force = true)
             }
         }
         viewModelScope.launch {
@@ -307,6 +326,8 @@ class HomeViewModel @Inject constructor(
      * @param categoryId ключ категории, `null` — «Все каналы».
      */
     fun selectCategory(categoryId: String?) {
+        // Пользователь выбрал категорию сам: после просмотра больше не переключаем её.
+        userChoseCategory = true
         selectedCategoryId = categoryId
         if (section == HomeSection.TV) lastTvCategoryId = categoryId
         // Выбор категории сбрасывает поиск: иначе список оставался отфильтрованным.
@@ -506,6 +527,8 @@ class HomeViewModel @Inject constructor(
      * виртуальным планировщиком крутятся вечно и сборка зависает.
      */
     fun tick() {
+        // Плеер открыт — экран не виден, время и передачу не пересчитываем.
+        if (!screenVisible) return
         val current = _state.value
         if (current !is HomeUiState.Content) return
         val now = clock.instant()
@@ -524,19 +547,54 @@ class HomeViewModel @Inject constructor(
      *
      * @param force перестроить состояние, даже если данные не менялись.
      */
+    /**
+     * Сообщает модели, виден ли сейчас список каналов.
+     *
+     * @param visible экран в композиции (не перекрыт плеером или поиском-оверлеем).
+     */
+    fun setScreenVisible(visible: Boolean) {
+        if (screenVisible == visible) return
+        screenVisible = visible
+        // Возврат на экран: сразу показываем актуальную передачу, не дожидаясь тика.
+        if (visible) refresh(force = true)
+    }
+
     fun refresh(force: Boolean = false) {
         refreshJob?.cancel()
+        // Плеер перекрыл список: ничего не пересчитываем, вернёмся — пересчитаем.
+        if (!screenVisible) return
         refreshJob = viewModelScope.launch {
             restoreDone.await()
             // После возврата из плеера карточка показывает канал, который смотрели последним.
-            val lastWatched = runCatching { recentChannels.channels.first().firstOrNull() }.getOrNull()
-            if (lastWatched != null && lastWatched != selectedChannelId?.value) {
-                selectedChannelId = ChannelId(lastWatched)
-            }
+            // Если выделение/категория сменились, нужен полный проход: refreshVisible()
+            // не публикует раздел и категорию, и экран оставался на «Недавних».
+            val followed = followLastWatched()
+            android.util.Log.d(
+                "SmotrishkaFollow",
+                "refresh: переключились=$followed раздел=$section категория=$selectedCategoryId " +
+                    "показанСписок=$showChannels",
+            )
+            // Общее смещение гида читаем на каждый пересчёт: настройка меняется редко,
+            // а живой коллектор оставлял незавершённую корутину в тестах.
+            globalEpgShift = settingsStore.globalEpgShift.first()
+            // Язык списков читаем на каждый пересчёт: настройка меняется редко.
+            channelLanguage = settingsStore.channelLanguage.first()
+            android.util.Log.d(
+                "SmotrishkaHome",
+                "сдвиг гида: общий=$globalEpgShift поканальных=${epgShifts.size} " +
+                    "пояс=${java.time.ZoneId.systemDefault()}",
+            )
             val syncAt = syncStatusStore.last()?.atMillis
-            if (!force && _state.value is HomeUiState.Content && syncAt == shownSyncAt) {
+            if (!force && !followed && _state.value is HomeUiState.Content && syncAt == shownSyncAt) {
                 refreshVisible()
                 return@launch
+            }
+
+            if (syncAt != shownSyncAt) {
+                // Данные обновились (в том числе гид): связи каналов с гидом пересобираем,
+                // иначе после импорта нового гида список показывает «Программы нет»,
+                // хотя окно программы находит передачи свежим сопоставлением.
+                runCatching { channelEpgStore.rebuild(catalogStore.playlist().channels) }
             }
 
             shownSyncAt = syncAt
@@ -553,6 +611,53 @@ class HomeViewModel @Inject constructor(
             _state.value = buildWithEpgRetry()
             publishWatchNext()
         }
+    }
+
+    /**
+     * Переводит выделение на канал, который смотрели последним, и открывает его категорию.
+     *
+     * Без смены категории канал, переключённый в оверлее плеера, остаётся за пределами
+     * видимого списка, и после «назад» экран показывает первый канал прежней категории
+     * (замечание Александра 09.11.2026).
+     */
+    private suspend fun followLastWatched(): Boolean {
+        val lastWatched = runCatching { recentChannels.channels.first().firstOrNull() }.getOrNull()
+            ?: return false
+        val channelId = ChannelId(lastWatched)
+        val categoryId = allChannels.firstOrNull { it.channel.id == channelId }?.channel?.categoryId
+            ?: runCatching {
+                catalogStore.playlist().channels
+                    .firstOrNull { it.id == channelId }?.categoryId
+            }.getOrNull()
+            ?: return false
+        // Уже стоим там, где нужно: ничего не перестраиваем, иначе пересчёт списка каждый раз
+        // возвращал бы пользователя в прежнюю категорию.
+        val alreadyThere = section == HomeSection.TV &&
+            selectedCategoryId == categoryId &&
+            selectedChannelId == channelId
+        if (alreadyThere) return false
+        selectedChannelId = channelId
+        // Канал уже открывали: живое превью должно показывать его эфир, а не логотип.
+        confirmedVideoChannelId = channelId
+        // Возврат из плеера — всегда в «Телеканалы» на категорию игравшего канала, списком,
+        // а не панелью категорий. Работает и для «Избранного», и для «Недавних»: раздел
+        // переключаем полями, без selectSection (тот публикует состояние своей корутиной
+        // и мог перезаписать уже собранный список).
+        userChoseCategory = false
+        if (section != HomeSection.TV) {
+            if (section == HomeSection.TV) lastTvCategoryId = selectedCategoryId
+            section = HomeSection.TV
+            programmeOpen = false
+        }
+        showChannels = true
+        selectedCategoryId = categoryId
+        lastTvCategoryId = categoryId
+        settingsStore.setLastCategory(categoryId)
+        android.util.Log.d(
+            "SmotrishkaFollow",
+            "вернулись из плеера: канал=$channelId категория=$categoryId раздел=$section",
+        )
+        return true
     }
 
     /**
@@ -669,9 +774,16 @@ class HomeViewModel @Inject constructor(
         )
     }
 
+    /**
+     * Сдвиг гида канала в часах.
+     *
+     * Свой сдвиг канала важнее общего (решение Александра 09.11.2026): общий нужен, когда
+     * провайдер отдаёт всю сетку в чужом поясе, а поканальный — для отдельных каналов.
+     */
+    private fun shiftHours(channelId: String): Int = epgShifts[channelId] ?: globalEpgShift
+
     /** Сдвиг гида канала в секундах (положительный — сетка «отстаёт» от эфира). */
-    private fun secondsShift(channel: Channel): Long =
-        (epgShifts[channel.id.value] ?: 0).toLong() * 60L * 60L
+    private fun secondsShift(channel: Channel): Long = shiftHours(channel.id.value).toLong() * 60L * 60L
 
     /**
      * Задаёт сдвиг гида для текущего канала карточки.
@@ -694,6 +806,9 @@ class HomeViewModel @Inject constructor(
             val rows = if (current.programmeOpen) scheduleFor(preview.channel) else current.schedule
             val latest = _state.value as? HomeUiState.Content ?: return@launch
             _state.value = latest.copy(schedule = rows, epgShiftHours = next)
+            // Карточки каналов тоже считают передачу со сдвигом: без полного прохода
+            // в списке остаются названия, посчитанные до смены сдвига.
+            refresh(force = true)
         }
     }
 
@@ -703,8 +818,23 @@ class HomeViewModel @Inject constructor(
      * Заявленный провайдером архив считается доступным, пока фоновая проверка не сказала
      * обратное: пустой набор проверки означает «ещё не проверяли».
      */
-    private fun Channel.hasArchive(): Boolean =
-        archive != null && (archiveVerified.isEmpty() || id.value in archiveVerified)
+    private fun Channel.hasArchive(): Boolean = archive != null
+
+    /**
+     * Подходит ли канал под выбранный язык.
+     *
+     * Канал без метки показывается всегда (решение Александра 09.11.2026): фильтр не должен
+     * терять каналы, язык которых не определён.
+     *
+     * @param channel карточка канала с меткой языка из плейлиста.
+     */
+    private fun matchesLanguage(channel: ChannelUi): Boolean {
+        val selected = channelLanguage ?: return true
+        val language = channel.channel.language
+        // «Основные» — только каналы без метки языка: так отсекаются все явные языки.
+        if (selected == PlayerSettingsStore.UNLABELLED_LANGUAGE) return language == null
+        return language == null || language.equals(selected, ignoreCase = true)
+    }
 
     private suspend fun buildState(withEpg: Boolean = true): HomeUiState =
         try {
@@ -738,11 +868,12 @@ class HomeViewModel @Inject constructor(
         val windowTo = now.plus(WINDOW_FORWARD_HOURS, ChronoUnit.HOURS)
         if (!withEpg) {
             // Быстрый проход: каналы без программы передач — список рисуется сразу.
+            // Многоточие нужно только когда показать ещё нечего.
             return buildContent(
                 playlist = playlist,
                 channels = playlist.channels.map { ChannelUi(it, null, null) },
                 now = now,
-                epgPending = true,
+                epgPending = allChannels.isEmpty(),
             )
         }
 
@@ -771,6 +902,11 @@ class HomeViewModel @Inject constructor(
         val channelsNeedingIcon = playlist.channels.filter { it.logoUrl.isNullOrBlank() }
         val epgIds = channelsNeedingIcon.mapNotNull { links[it.id] }.toSet()
         val icons = runCatching { epgStore.icons(epgIds) }.getOrDefault(emptyMap())
+        android.util.Log.d(
+            "SmotrishkaHome",
+            "логотипы: своих=${playlist.channels.count { !it.logoUrl.isNullOrBlank() }} " +
+                "без=${channelsNeedingIcon.size} связанных=${epgIds.size} из гида=${icons.size}",
+        )
         val catalogWithIcons = if (icons.isEmpty()) {
             playlist.channels
         } else {
@@ -802,7 +938,10 @@ class HomeViewModel @Inject constructor(
                 playlist = playlist,
                 channels = fallback,
                 now = now,
-                epgPending = true,
+                // Гид не ответил вовремя: если передачи уже показаны, оставляем их как есть.
+                // Многоточие на экране — это видимый «провал» (замечание Александра
+                // 09.11.2026): обновление должно проходить незаметно.
+                epgPending = allChannels.isEmpty(),
             )
         }
         mark("передачи ${programmesByChannel.size}")
@@ -815,7 +954,7 @@ class HomeViewModel @Inject constructor(
             } else {
                 val programmes = programmesByChannel[epgId].orEmpty()
                 // Сдвиг гида канала: у части каналов провайдер отдаёт сетку со смещением.
-                val shiftSeconds = (epgShifts[channel.id.value] ?: 0).toLong() * 60L * 60L
+                val shiftSeconds = shiftHours(channel.id.value).toLong() * 60L * 60L
                 val at = now.minusSeconds(shiftSeconds)
                 val current = programmes.firstOrNull { !it.start.isAfter(at) && it.end.isAfter(at) }
                 val next = programmes.firstOrNull { it.start.isAfter(at) }
@@ -823,6 +962,7 @@ class HomeViewModel @Inject constructor(
                     channel = channel,
                     nowTitle = current?.title,
                     nextTitle = next?.title,
+                    nowDescription = current?.description,
                     nowStart = current?.start?.plusSeconds(shiftSeconds),
                     nowEnd = current?.end?.plusSeconds(shiftSeconds),
                 )
@@ -830,16 +970,9 @@ class HomeViewModel @Inject constructor(
         }
 
         mark("карточки каналов")
-        // «Избранное» и «Недавние» — разделы, а не категории: в плашке их нет.
-        val categories = buildList {
-            add(CategoryUi(id = null, name = "Все каналы"))
-            // В плейлистах названия категорий часто со строчной буквы — показываем с заглавной.
-            playlist.categories.forEach {
-                add(CategoryUi(id = it.id, name = it.name.replaceFirstChar(Char::uppercaseChar)))
-            }
-        }
-
-        return buildContent(playlist, withProgramme, now, categories)
+        // Категории не передаём готовым списком: их строит buildContent из уже
+        // отфильтрованных каналов, иначе языковые категории остаются при фильтре «Основные».
+        return buildContent(playlist, withProgramme, now)
     }
 
     /**
@@ -861,16 +994,22 @@ class HomeViewModel @Inject constructor(
         // true — гид ещё читается из базы: «Программы нет» в это время не показываем.
         epgPending: Boolean = false,
     ): HomeUiState {
+        // Передачи обновляются незаметно: если свежий проход не дал название, оставляем
+        // прежнее, а не показываем «…» или «Программы нет» (замечание Александра 09.11.2026).
+        allChannels = channels.withProgrammesFrom(allChannels)
+            // Языковой фильтр: остаются каналы выбранного языка и каналы без метки
+            // (решение Александра 09.11.2026 — каналы без метки не теряются).
+            .filter { matchesLanguage(it) }
+        // Категории строятся из уже отфильтрованных каналов: опустевшие не показываем
+        // (замечание Александра 09.11.2026 — не выводить лишние языковые категории).
         val categories = preparedCategories ?: buildList {
             add(CategoryUi(id = null, name = "Все каналы"))
-            playlist.categories.forEach {
-                add(CategoryUi(id = it.id, name = it.name.replaceFirstChar(Char::uppercaseChar)))
-            }
+            playlist.categories
+                .filter { category -> allChannels.any { it.channel.categoryId == category.id } }
+                .forEach {
+                    add(CategoryUi(id = it.id, name = it.name.replaceFirstChar(Char::uppercaseChar)))
+                }
         }
-
-        // Проход без передач не должен затирать уже известные названия: иначе после
-        // возврата из плеера список показывал многоточия, хотя гид в базе есть.
-        allChannels = if (epgPending) channels.withProgrammesFrom(allChannels) else channels
         // Видео в карточке привязано к каналу, подтверждённому OK; при первом построении
         // подтверждаем текущий выбранный, чтобы превью не оставалось пустым.
         if (confirmedVideoChannelId == null) confirmedVideoChannelId = selectedChannelId

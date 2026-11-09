@@ -121,6 +121,7 @@ data class CategoryUi(
  * @param channel канал;
  * @param nowTitle что идёт сейчас (`null` — программы нет);
  * @param nextTitle что будет дальше (`null` — неизвестно);
+ * @param nowDescription описание текущей передачи из гида (`null` — провайдер не дал);
  * @param nowStart начало текущей передачи (`null` — программы нет);
  * @param nowEnd конец текущей передачи (`null` — программы нет).
  */
@@ -128,6 +129,7 @@ data class ChannelUi(
     val channel: Channel,
     val nowTitle: String?,
     val nextTitle: String?,
+    val nowDescription: String? = null,
     val nowStart: Instant? = null,
     val nowEnd: Instant? = null,
 )

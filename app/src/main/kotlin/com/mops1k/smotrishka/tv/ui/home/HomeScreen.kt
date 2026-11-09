@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +38,7 @@ import androidx.lifecycle.compose.currentStateAsState
 import com.mops1k.smotrishka.tv.core.designsystem.theme.TvColors
 import com.mops1k.smotrishka.tv.core.data.SearchHitKind
 import com.mops1k.smotrishka.tv.core.model.ChannelId
+import com.mops1k.smotrishka.tv.ui.SearchShortcut
 import com.mops1k.smotrishka.tv.ui.common.LocalToastController
 import com.mops1k.smotrishka.tv.ui.common.TextFormat
 import com.mops1k.smotrishka.tv.ui.common.rememberDeviceProfile
@@ -104,7 +106,15 @@ fun HomeScreen(
     // Возврат с настроек или из плеера должен показать свежие каналы и передачу.
     // Без force: если каталог не обновлялся, экран не пересобирается заново на каждый возврат
     // из плеера — раньше это давало повторные проходы по 3752 каналам.
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
+    // Возврат на главный экран пересобирает список принудительно: настройки языка и другие
+    // переключатели применяются без перезапуска приложения (замечание 09.11.2026).
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh(force = true) }
+
+    // Пока экран в композиции, список живой; плеер его вытесняет — и пересчёты прекращаются.
+    DisposableEffect(Unit) {
+        viewModel.setScreenVisible(true)
+        onDispose { viewModel.setScreenVisible(false) }
+    }
 
     // Время на экране идёт, пока он открыт: иначе прогресс передачи «застывает».
     LaunchedEffect(Unit) {
@@ -115,6 +125,12 @@ fun HomeScreen(
     }
 
     var searchOpen by remember { mutableStateOf(false) }
+
+    // Кнопка «Поиск» на пульте открывает ту же строку поиска, что и кнопка на экране
+    // (замечание Александра 09.11.2026).
+    LaunchedEffect(Unit) {
+        SearchShortcut.requests.collect { searchOpen = true }
+    }
     // Окно «Архив» для каналов без программы передач, но с архивом.
     var archivePickerOpen by remember { mutableStateOf(false) }
 
@@ -215,6 +231,12 @@ fun HomeScreen(
     AppShell(
         sidebarFocused = sidebarFocused,
         menuFocusRequester = focusTargets.menu,
+        // Из меню «вправо» — в видимую панель: категории, а когда их нет — список каналов.
+        sidebarRightFocus = when {
+            content?.section == HomeSection.TV && !content.showChannels -> focusTargets.categories
+            content != null -> focusTargets.list
+            else -> null
+        },
         destination = content?.section?.toDestination() ?: ShellDestination.TV,
         onSelect = { destination ->
             when (destination) {
@@ -226,6 +248,7 @@ fun HomeScreen(
         onSearch = { searchOpen = true },
         onSearchLeftEdge = activateMenu,
         searchFocusRequester = focusTargets.search,
+        searchDownFocusRequester = focusTargets.preview,
     ) {
         when (val current = state) {
             HomeUiState.Loading -> CenteredMessage("Загружаем каналы…")
@@ -445,6 +468,15 @@ private fun SectionContent(
                     else -> onLeftToCategories
                 },
                 onFocusInList = onFocusInList,
+                // «←» у названия категории: на тач-экране категории иначе недостижимы.
+                // В разделах и при активном поиске списка категорий нет — стрелки тоже.
+                onBackToCategories = if (
+                    content.section == HomeSection.TV && content.query.isBlank()
+                ) {
+                    onLeftToCategories
+                } else {
+                    null
+                },
                 // Что за список показан: по этому ключу сбрасываются прокрутка и фокус,
                 // иначе они переезжали из «Телеканалов» в «Избранное» и поиск.
                 listKey = "${content.section}|${content.selectedCategoryId.orEmpty()}|${content.query}",
@@ -466,7 +498,10 @@ private fun SectionContent(
                 now = content.now,
                 zone = zone,
                 showLogo = showLogos,
-                livePreview = livePreview,
+                // Живой кадр только для канала, который пользователь уже открыл: до первого
+                // открытия показываем логотип канала под фокусом (замечание Александра
+                // 09.11.2026).
+                livePreview = livePreview && content.previewVideoChannel != null,
                 bufferSeconds = bufferSeconds,
                 programmeOpen = content.programmeOpen,
                 programmeFocus = programmeFocus,
@@ -481,13 +516,25 @@ private fun SectionContent(
                 onCollapseProgramme = onCollapseProgramme,
                 onScheduleClick = onScheduleClick,
                 narrow = narrow,
-                leftTarget = focusTargets.list,
+                // «Влево» возвращает в ту панель, из которой пришли: пока открыты категории,
+                // списка каналов на экране нет, и фокус должен вернуться в категории
+                // (замечание Александра 09.11.2026).
+                leftTarget = if (content.section == HomeSection.TV && !content.showChannels) {
+                    focusTargets.categories
+                } else {
+                    focusTargets.list
+                },
                 upTarget = focusTargets.search,
+                previewFocus = focusTargets.preview,
                 epgShiftHours = content.epgShiftHours,
                 onChangeEpgShift = onChangeEpgShift,
-                // Передач нет, но архив есть — вместо «Программы» кнопка «Архив».
+                // Передач нет вовсе, но архив есть — только тогда вместо «Программы» «Архив».
+                // Ориентир — текущая передача канала, а не список расписания: он приходит
+                // не всегда, и кнопка «Архив» появлялась у канала с программой
+                // (замечание Александра 09.11.2026).
                 onOpenArchivePicker = if (
-                    content.schedule.isEmpty() && content.previewChannel?.channel?.archive != null
+                    content.previewChannel?.nowTitle == null &&
+                    content.previewChannel?.channel?.archive != null
                 ) {
                     onOpenArchivePicker
                 } else {

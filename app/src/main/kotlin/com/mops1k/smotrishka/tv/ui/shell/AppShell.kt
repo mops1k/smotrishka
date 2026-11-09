@@ -56,10 +56,15 @@ fun AppShell(
     sidebarFocused: Boolean = false,
     // Адрес фокуса текущего пункта меню: по нему «влево» с края контента попадает в меню.
     menuFocusRequester: FocusRequester? = null,
+    // Куда ведёт «вправо» из меню: видимая панель контента.
+    sidebarRightFocus: FocusRequester? = null,
     // «Влево» с кнопки поиска открывает боковое меню.
     onSearchLeftEdge: (() -> Unit)? = null,
     // Адрес кнопки поиска: на неё ведёт «вверх» из карточки канала.
     searchFocusRequester: FocusRequester? = null,
+    // «Вниз» с поиска ведёт на превью карточки: между шапкой и карточкой не должно
+    // быть прыжков в пустоту.
+    searchDownFocusRequester: FocusRequester? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val now = rememberClock()
@@ -78,6 +83,7 @@ fun AppShell(
                     narrow = narrow,
                     focusEnabled = sidebarFocused,
                     menuFocusRequester = menuFocusRequester,
+                    rightFocus = sidebarRightFocus,
                     updateAvailable = LocalUpdateBadge.current,
                 )
                 Column(
@@ -98,6 +104,7 @@ fun AppShell(
                         narrow = narrow,
                         onSearchLeftEdge = onSearchLeftEdge,
                         searchFocusRequester = searchFocusRequester,
+                        searchDownFocusRequester = searchDownFocusRequester,
                     )
                     CompositionLocalProvider(LocalNarrowLayout provides narrow) {
                         content()

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
@@ -105,6 +107,11 @@ fun SettingsScreen(
     val quality by viewModel.videoQuality.collectAsStateWithLifecycle()
     val recoveryDelaySeconds by viewModel.recoveryDelaySeconds.collectAsStateWithLifecycle()
     val epgWindowHours by viewModel.epgWindowHours.collectAsStateWithLifecycle()
+    val globalEpgShift by viewModel.globalEpgShift.collectAsStateWithLifecycle()
+    // Языковой фильтр списков: выбранный язык и показ каналов без метки.
+    val channelLanguage by viewModel.channelLanguage.collectAsStateWithLifecycle()
+    val languageFromName by viewModel.languageFromName.collectAsStateWithLifecycle()
+    val languages by viewModel.languages.collectAsStateWithLifecycle()
     val dataSaver by viewModel.dataSaver.collectAsStateWithLifecycle()
     val audioLanguage by viewModel.audioLanguage.collectAsStateWithLifecycle()
     val archiveDepthHours by viewModel.archiveDepthHours.collectAsStateWithLifecycle()
@@ -204,11 +211,13 @@ fun SettingsScreen(
                         EpgCard(
                             epgWindowHours = epgWindowHours,
                             archiveDepthHours = archiveDepthHours,
+                            globalEpgShift = globalEpgShift,
                             osdHideSeconds = osdHideSeconds,
                             guides = guides,
                             guideMessage = guideMessage,
                             onEpgWindow = viewModel::setEpgWindowHours,
                             onArchiveDepth = viewModel::setArchiveDepthHours,
+                            onGlobalShift = viewModel::setGlobalEpgShift,
                             onOsdHide = viewModel::setOsdHideSeconds,
                             onAddGuide = { guideDialog = true },
                             onRemoveGuide = { guide ->
@@ -218,6 +227,16 @@ fun SettingsScreen(
                             modifier = Modifier.weight(1f),
                         )
                     }
+                    Spacer(Modifier.height(17.dp))
+                    LanguagesCard(
+                        selected = channelLanguage,
+                        languageFromName = languageFromName,
+                        languages = languages,
+                        onSelect = viewModel::setChannelLanguage,
+                        onLanguageFromName = viewModel::setLanguageFromName,
+                        // Карточка во всю ширину: в Column weight(1f) дал бы нулевую высоту.
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     Spacer(Modifier.height(17.dp))
                     PlayerCard(
                         osdHideSeconds = osdHideSeconds,
@@ -475,16 +494,81 @@ private fun HomeScreenCard(
 /**
  * Карточка «Программа передач»: окно, глубина архива и гиды XMLTV.
  */
+/**
+ * Подпись выбора языка в настройках.
+ *
+ * @param language сохранённое значение: `null` — все, [PlayerSettingsStore.UNLABELLED_LANGUAGE] — основные.
+ */
+private fun languageLabel(language: String?): String = when (language) {
+    null -> "все"
+    PlayerSettingsStore.UNLABELLED_LANGUAGE -> "Основные"
+    else -> language
+}
+
+/**
+ * Карточка «Язык каналов».
+ *
+ * Фильтр работает по языку канала: `tvg-language` из плейлиста, иначе языковая группа.
+ * Каналы без метки показываются всегда (решение Александра 09.11.2026).
+ *
+ * @param selected выбранный язык, `null` — все;
+ * @param languageFromName определять язык по названию канала (`... HD ES`, `... US`);
+ * @param languages языки, найденные в плейлисте;
+ * @param onSelect выбор языка;
+ * @param onLanguageFromName переключение определения языка по названию;
+ * @param modifier размеры карточки.
+ */
+@Composable
+private fun LanguagesCard(
+    selected: String?,
+    languageFromName: Boolean,
+    languages: List<String>,
+    onSelect: (String?) -> Unit,
+    onLanguageFromName: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    SettingsCard(
+        icon = Icons.Filled.Language,
+        iconTint = Color(0xFF8F7BF0),
+        iconBackground = Color(0x218F7BF0),
+        title = "Язык каналов",
+        subtitle = "Только каналы нужного языка",
+        modifier = modifier,
+    ) {
+        SettingsRow(
+            title = "Язык каналов",
+            value = languageLabel(selected),
+            hint = "Язык берётся из метки tvg-language, иначе из языковой группы канала",
+        )
+        // «Основные» — каналы без метки языка: выбор отсекает все явные языки.
+        val options = listOf<String?>(null, PlayerSettingsStore.UNLABELLED_LANGUAGE) + languages
+        ChoiceGroup(
+            options = options.map { languageLabel(it) to (it == selected) },
+            columns = 3,
+            onPick = { index -> onSelect(options.getOrNull(index)) },
+        )
+        ToggleRow(
+            title = "Определять язык по названию",
+            hint = "Хвосты вида «... HD ES», «... US» задают язык канала",
+            checked = languageFromName,
+            onToggle = onLanguageFromName,
+        )
+    }
+}
+
 @Composable
 private fun EpgCard(
     epgWindowHours: Int,
     archiveDepthHours: Int,
+    // Общее смещение гида: применяется к каналам без своего сдвига.
+    globalEpgShift: Int,
     // Сколько секунд меню плеера показывается без действий.
     osdHideSeconds: Int,
     guides: List<EpgGuide>,
     guideMessage: String?,
     onEpgWindow: (Int) -> Unit,
     onArchiveDepth: (Int) -> Unit,
+    onGlobalShift: (Int) -> Unit,
     onOsdHide: (Int) -> Unit,
     onAddGuide: () -> Unit,
     onRemoveGuide: (EpgGuide) -> Unit,
@@ -525,6 +609,37 @@ private fun EpgCard(
                 onArchiveDepth(PlayerSettingsStore.ARCHIVE_DEPTH_CHOICES[index])
             },
         )
+
+        SettingsRow(
+            title = "Смещение гида",
+            value = shiftLabel(globalEpgShift),
+            hint = "Если вся сетка провайдера в чужом поясе; сдвиг отдельного канала важнее общего",
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 11.dp),
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            ChoiceButton(
+                label = "−1 ч",
+                selected = false,
+                modifier = Modifier.weight(1f),
+                onClick = { onGlobalShift(globalEpgShift - 1) },
+            )
+            ChoiceButton(
+                label = "0",
+                selected = globalEpgShift == 0,
+                modifier = Modifier.weight(1f),
+                onClick = { onGlobalShift(0) },
+            )
+            ChoiceButton(
+                label = "+1 ч",
+                selected = false,
+                modifier = Modifier.weight(1f),
+                onClick = { onGlobalShift(globalEpgShift + 1) },
+            )
+        }
 
         SettingsRow(
             title = "Источники программы передач",
@@ -894,9 +1009,12 @@ private fun ToggleRow(title: String, hint: String, checked: Boolean, onToggle: (
             Box(
                 modifier = Modifier
                     .size(16.dp)
+                    // Кружок переезжает вправо при включении: раньше менялся только цвет,
+                    // и выключатель выглядел непереключённым (замечание Александра 09.11.2026).
+                    // Без анимации: на слабых приставках лишние кадры не нужны.
+                    .offset(x = if (checked) 17.dp else 0.dp)
                     .clip(RoundedCornerShape(20.dp))
-                    .background(if (checked) Color.White else Color(0xFF9299A6))
-                    .then(Modifier),
+                    .background(if (checked) Color.White else Color(0xFF9299A6)),
             )
         }
     }
@@ -1155,3 +1273,10 @@ private fun depthLabel(hours: Int): String =
 /** Подпись варианта окна программы передач. */
 private fun windowLabel(hours: Int): String =
     if (hours % 24 == 0) "${hours / 24} сут" else "$hours ч"
+
+/** Подпись общего смещения гида. */
+private fun shiftLabel(hours: Int): String = when {
+    hours == 0 -> "нет"
+    hours > 0 -> "+$hours ч"
+    else -> "$hours ч"
+}

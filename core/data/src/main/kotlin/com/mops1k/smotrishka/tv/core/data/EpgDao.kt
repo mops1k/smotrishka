@@ -31,6 +31,20 @@ interface EpgDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertProgrammesMissing(programmes: List<ProgrammeEntity>)
 
+    /**
+     * Дописывает описание уже загруженной передаче, не трогая название и время.
+     *
+     * Провайдерский гид перезаписывать нельзя, но описание из общего гида должно доехать:
+     * раньше строка не обновлялась вообще и описание терялось (замечание Александра
+     * 09.11.2026).
+     */
+    @Query(
+        "UPDATE programmes SET description = :description " +
+            "WHERE channelId = :channelId AND startAt = :startAt " +
+            "AND (description IS NULL OR description = '')",
+    )
+    suspend fun fillDescription(channelId: String, startAt: Long, description: String)
+
     /** Наблюдение за числом передач: меняется, когда гид дописывается в базу. */
     @Query("SELECT COUNT(*) FROM programmes")
     fun observeProgrammeCount(): kotlinx.coroutines.flow.Flow<Int>

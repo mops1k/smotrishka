@@ -48,6 +48,16 @@ class ProgrammeViewModel @Inject constructor(
         viewModelScope.launch { _state.value = buildState() }
     }
 
+    /**
+     * Пересобирает состояние.
+     *
+     * Экран зовёт его по таймеру: передача сменяется по ходу эфира, и «сейчас» должно
+     * переехать на новую строку (замечание Александра 09.11.2026).
+     */
+    fun refresh() {
+        viewModelScope.launch { _state.value = buildState() }
+    }
+
     private suspend fun buildState(): ProgrammeUiState = runCatching {
         val channel = catalogStore.playlist().channels.firstOrNull { it.id == ChannelId(channelId) }
             ?: return@runCatching ProgrammeUiState.Error("Канал не найден в плейлисте")
@@ -57,13 +67,28 @@ class ProgrammeViewModel @Inject constructor(
 
         val now = clock.instant()
         val depthHours = settingsStore.archiveDepthHours.first()
+        // Сдвиг гида: свой у канала важнее общего (решение Александра 09.11.2026).
+        val shiftHours = settingsStore.epgShifts.first()[channel.id.value]
+            ?: settingsStore.globalEpgShift.first()
+        val shiftSeconds = shiftHours.toLong() * 60L * 60L
         // Список программы показывает передачи на всю глубину архива, а не только сутки назад.
         val backHours = maxOf(BACK_HOURS, depthHours.toLong())
         val programmes = epgStore.programmes(
             channelId = epgId,
             from = now.minus(backHours, ChronoUnit.HOURS),
             to = now.plus(FORWARD_HOURS, ChronoUnit.HOURS),
-        )
+        ).map { programme ->
+            if (shiftSeconds == 0L) {
+                programme
+            } else {
+                // Сетка провайдера со смещением: показываем время с поправкой,
+                // а «сейчас»/«прошла» считаем уже по исправленному времени.
+                programme.copy(
+                    start = programme.start.plusSeconds(shiftSeconds),
+                    end = programme.end.plusSeconds(shiftSeconds),
+                )
+            }
+        }
 
         ProgrammeUiState.Content(
             channelId = channel.id,
@@ -72,6 +97,7 @@ class ProgrammeViewModel @Inject constructor(
             items = programmes.map { programme ->
                 ProgrammeUi(
                     title = programme.title,
+                    description = programme.description,
                     start = programme.start,
                     end = programme.end,
                     isCurrent = !programme.start.isAfter(now) && programme.end.isAfter(now),

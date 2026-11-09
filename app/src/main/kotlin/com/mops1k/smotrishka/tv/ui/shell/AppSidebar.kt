@@ -74,6 +74,8 @@ fun AppSidebar(
     focusEnabled: Boolean = true,
     // Адрес фокуса текущего пункта: по нему в меню попадает «влево» с края контента.
     menuFocusRequester: FocusRequester? = null,
+    // Куда ведёт «вправо» из меню: в видимую панель контента (категории или список).
+    rightFocus: FocusRequester? = null,
     // Доступно обновление: на пункте «О приложении» появляется точка акцента.
     updateAvailable: Boolean = false,
 ) {
@@ -128,6 +130,10 @@ fun AppSidebar(
                     narrow = collapsed,
                     focusEnabled = focusEnabled,
                     focusRequester = if (destination == current) currentRequester else null,
+                    // «Вправо» из меню ведёт в видимую панель контента, а не «в никуда»:
+                    // раньше первый шаг вправо попадал на скрытый элемент (замечание
+                    // Александра 09.11.2026).
+                    rightFocus = rightFocus,
                     badge = updateAvailable && destination == ShellDestination.ABOUT,
                     onClick = { onSelect(destination) },
                 )
@@ -183,6 +189,8 @@ private fun MenuItem(
     // Фокус пункта разрешён только когда меню активировано кнопкой «влево».
     focusEnabled: Boolean = true,
     focusRequester: FocusRequester? = null,
+    // Куда ведёт «вправо» из пункта меню: видимая панель контента.
+    rightFocus: FocusRequester? = null,
     // Есть обновление: точка акцента на иконке.
     badge: Boolean = false,
 ) {
@@ -228,7 +236,12 @@ private fun MenuItem(
             .onFocusChanged { focused = it.isFocused }
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             // Пока меню не активировано «влево», пункт не участвует в поиске фокуса.
-            .focusProperties { canFocus = focusEnabled }
+            .focusProperties {
+                canFocus = focusEnabled
+                // «Вправо» — в видимую панель, иначе фокус уходил на невидимый элемент
+                // и требовалось второе нажатие (замечание Александра 09.11.2026).
+                if (rightFocus != null) right = rightFocus
+            }
             .clickable { onClick() }
             .tvFocusRing(focused = focused, shape = shape)
             .then(if (focused) Modifier.border(3.dp, TvColors.focusOutline, shape) else Modifier)

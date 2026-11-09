@@ -75,6 +75,9 @@ class PlayerViewModel @Inject constructor(
     /** Состояние экрана. */
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
 
+    /** Тик пересчёта телепрограммы: секунды эпохи на момент последнего обновления. */
+    private val scheduleTick = MutableStateFlow(0L)
+
     private val _bufferSeconds = MutableStateFlow(PlayerSettingsStore.DEFAULT_BUFFER_SECONDS)
 
     /** Сколько секунд вперёд держать в буфере (настройка из экрана настроек). */
@@ -219,9 +222,24 @@ class PlayerViewModel @Inject constructor(
      * Телепрограмма текущего канала для OSD-панели.
      *
      * Считается прямо в плеере: панель открывается поверх видео и не должна уводить
-     * на отдельный экран (указание Александра 05.11.2026).
+     * на отдельный экран (указание Александра 05.11.2026). Список пересобирается при каждом
+     * [refreshProgramme] — экран зовёт его раз в 20 секунд, иначе к концу передачи OSD
+     * показывает её же как «сейчас» (замечание Александра 09.11.2026).
      */
-    val schedule: Flow<List<ProgrammeRowUi>> = flow {
+    val schedule: Flow<List<ProgrammeRowUi>> = scheduleTick.map { buildSchedule() }
+
+    /**
+     * Просит пересчитать передачу и список телепрограммы.
+     *
+     * Вызывается экраном по таймеру: время идёт, а состояние плеера само не меняется.
+     */
+    fun refreshProgramme() {
+        viewModelScope.launch { _state.value = buildState() }
+        scheduleTick.value = clock.instant().epochSecond
+    }
+
+    /** Список передач канала на всё окно архива: столько же, сколько на экране программы. */
+    private suspend fun buildSchedule(): List<ProgrammeRowUi> {
         val channel = catalogStore.playlist().channels
             .firstOrNull { it.id.value == channelId }
         android.util.Log.d(
@@ -229,10 +247,8 @@ class PlayerViewModel @Inject constructor(
             "старт: channelId=$channelId найден=${channel != null} имя='${channel?.name.orEmpty()}'",
         )
         if (channel == null) {
-            emit(emptyList())
-            return@flow
+            return emptyList()
         }
-        val now = clock.instant()
         val links = runCatching { channelEpgStore.links() }.getOrDefault(emptyMap())
         val epgId = links[channel.id] ?: channel.epgId
         android.util.Log.d(
@@ -240,18 +256,17 @@ class PlayerViewModel @Inject constructor(
             "канал='${channel.name}' связей=${links.size} epgId=${epgId ?: "нет"} " +
                 "epgId каталога='${channel.epgId ?: "нет"}'",
         )
-        val resolved = epgId ?: currentEpgId(channel)
-        if (resolved == null) {
-            emit(emptyList())
-            return@flow
-        }
+        val resolved = epgId ?: currentEpgId(channel) ?: return emptyList()
+        val now = clock.instant()
+        val depthHours = settingsStore.archiveDepthHours.first()
+        // Такое же окно, как на экране «Телепрограмма»: глубина архива назад и сутки вперёд.
+        val backHours = maxOf(SCHEDULE_BACK_HOURS, depthHours.toLong())
         val programmes = epgStore.programmes(
             channelId = resolved,
-            from = now.minus(6, ChronoUnit.HOURS),
-            to = now.plus(6, ChronoUnit.HOURS),
+            from = now.minus(backHours, ChronoUnit.HOURS),
+            to = now.plus(SCHEDULE_FORWARD_HOURS, ChronoUnit.HOURS),
         )
-        // Ручной сдвиг гида этого канала: у части каналов провайдер отдаёт сетку со смещением.
-        val shiftSeconds = (settingsStore.epgShifts.first()[channel.id.value] ?: 0).toLong() * 3600L
+        val shiftSeconds = epgShiftSeconds(channel)
         val shifted = if (shiftSeconds == 0L) {
             programmes
         } else {
@@ -260,13 +275,11 @@ class PlayerViewModel @Inject constructor(
             }
         }
         // Диагностика: видно, с каким каналом гида сопоставлен канал и что считается текущим.
-        logGuideMatch(channel, resolved, programmes)
-        emit(
-            ProgrammeRows.build(
-                programmes = shifted,
-                now = now,
-                channelHasArchive = channel.archive != null,
-            ),
+        logGuideMatch(channel, resolved, programmes, shiftSeconds)
+        return ProgrammeRows.build(
+            programmes = shifted,
+            now = now,
+            channelHasArchive = channel.archive != null,
         )
     }
 
@@ -276,11 +289,17 @@ class PlayerViewModel @Inject constructor(
      * Пишет в журнал, с каким каналом гида сопоставлен канал каталога и какая передача
      * считается текущей. Нужно, чтобы отличить чужую сетку передач от сдвига времени.
      */
-    private suspend fun logGuideMatch(channel: Channel, epgId: String, programmes: List<Programme>) {
+    private suspend fun logGuideMatch(
+        channel: Channel,
+        epgId: String,
+        programmes: List<Programme>,
+        shiftSeconds: Long = 0L,
+    ) {
         val epgName = runCatching {
             epgStore.epgChannels().firstOrNull { it.id == epgId }?.displayName
         }.getOrNull()
-        val current = programmes.firstOrNull { !it.start.isAfter(clock.instant()) && it.end.isAfter(clock.instant()) }
+        val at = clock.instant().minusSeconds(shiftSeconds)
+        val current = programmes.firstOrNull { !it.start.isAfter(at) && it.end.isAfter(at) }
         android.util.Log.d(
             "SmotrishkaGuide",
             "канал='${channel.name}' epgId=$epgId гид='${epgName.orEmpty()}' " +
@@ -353,16 +372,6 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch { recentChannels.remember(channelId) }
     }
 
-    /**
-     * Перепроверяет передачу в OSD.
-     *
-     * Вызывается с экрана по таймеру: бесконечный цикл во ViewModel зависал в тестах с
-     * виртуальным планировщиком.
-     */
-    fun refreshProgramme() {
-        viewModelScope.launch { _state.value = buildState() }
-    }
-
     private suspend fun buildState(): PlayerUiState = runCatching { loadState() }.getOrElse { error ->
         PlayerUiState.Error("Не удалось открыть канал: ${error.message ?: "неизвестная ошибка"}")
     }
@@ -421,15 +430,38 @@ class PlayerViewModel @Inject constructor(
     }
 
     /** Передача, которая идёт прямо сейчас по этому каналу. */
-    private suspend fun currentProgramme(channel: Channel): Programme? {        val matches = epgMatcher.match(listOf(channel), epgStore.epgChannels()).matches
-        val epgId = matches[channel.id] ?: return null
+    /** Передача, которая идёт прямо сейчас по этому каналу. */
+    private suspend fun currentProgramme(channel: Channel): Programme? {
+        // Та же связь с гидом и тот же сдвиг, что у списка каналов и экрана программы:
+        // иначе OSD показывал передачу, которой в эфире нет (замечание Александра 09.11.2026).
+        val epgId = channelEpgStore.links()[channel.id]
+            ?: channel.epgId
+            ?: epgMatcher.match(listOf(channel), epgStore.epgChannels()).matches[channel.id]
+            ?: return null
 
-        val now = clock.instant()
-        return epgStore.programmes(
+        val shiftSeconds = epgShiftSeconds(channel)
+        val at = clock.instant().minusSeconds(shiftSeconds)
+        val found = epgStore.programmes(
             channelId = epgId,
-            from = now.minus(24, ChronoUnit.HOURS),
-            to = now.plus(24, ChronoUnit.HOURS),
-        ).firstOrNull { !it.start.isAfter(now) && it.end.isAfter(now) }
+            from = at.minus(24, ChronoUnit.HOURS),
+            to = at.plus(24, ChronoUnit.HOURS),
+        ).firstOrNull { !it.start.isAfter(at) && it.end.isAfter(at) }
+        return if (found == null || shiftSeconds == 0L) {
+            found
+        } else {
+            // Время показываем с поправкой, как в списке каналов.
+            found.copy(
+                start = found.start.plusSeconds(shiftSeconds),
+                end = found.end.plusSeconds(shiftSeconds),
+            )
+        }
+    }
+
+    /** Сдвиг гида канала в секундах: свой важнее общего (решение Александра 09.11.2026). */
+    private suspend fun epgShiftSeconds(channel: Channel): Long {
+        val own = settingsStore.epgShifts.first()[channel.id.value]
+        val hours = own ?: settingsStore.globalEpgShift.first()
+        return hours.toLong() * 60L * 60L
     }
 
     companion object {
@@ -447,6 +479,10 @@ class PlayerViewModel @Inject constructor(
 
         private const val WINDOW_HOURS = 24L
         private const val STOP_TIMEOUT_MS = 5_000L
+
+        /** Окно телепрограммы в OSD: столько же, сколько на экране программы. */
+        private const val SCHEDULE_BACK_HOURS = 12L
+        private const val SCHEDULE_FORWARD_HOURS = 24L
 
         /** Как часто обновляем передачу в OSD. */
         private const val PROGRAMME_TICK_MS = 20_000L

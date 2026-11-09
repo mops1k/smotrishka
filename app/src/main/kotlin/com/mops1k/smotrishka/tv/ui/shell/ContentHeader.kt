@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
@@ -72,6 +73,8 @@ fun ContentHeader(
     onSearchLeftEdge: (() -> Unit)? = null,
     // Адрес кнопки поиска: на неё ведёт «вверх» из карточки канала.
     searchFocusRequester: FocusRequester? = null,
+    // «Вниз» с поиска ведёт на превью карточки: геометрия иногда выбирала шапку.
+    searchDownFocusRequester: FocusRequester? = null,
 ) {
     Row(
         modifier = modifier
@@ -94,6 +97,7 @@ fun ContentHeader(
                     narrow = narrow,
                     onLeftEdge = onSearchLeftEdge,
                     focusRequester = searchFocusRequester,
+                    downTarget = searchDownFocusRequester,
                 )
                 Spacer(Modifier.width(15.dp))
             }
@@ -128,6 +132,8 @@ private fun SearchButton(
     // Кнопка поиска — левый верхний край контента: «влево» отсюда открывает меню.
     onLeftEdge: (() -> Unit)? = null,
     focusRequester: FocusRequester? = null,
+    // «Вниз» с поиска — на превью карточки канала.
+    downTarget: FocusRequester? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(TvRadius.item)
@@ -136,6 +142,7 @@ private fun SearchButton(
             .size(if (narrow) 36.dp else TvDimens.iconButton)
             .clip(shape)
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .then(if (downTarget != null) Modifier.focusProperties { down = downTarget } else Modifier)
             .background(if (focused) TvColors.accent else TvColors.panel)
             .border(if (focused) 3.dp else 1.dp, if (focused) TvColors.focusOutline else TvColors.line, shape)
             .onFocusChanged { focused = it.isFocused }

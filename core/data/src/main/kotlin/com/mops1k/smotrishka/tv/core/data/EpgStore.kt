@@ -58,6 +58,7 @@ class EpgStore(
             val entities = epg.programmes.map(mapper::toEntity)
             val before = dao.countProgrammes()
             dao.insertProgrammesMissing(entities)
+            fillDescriptions(entities)
             added = (dao.countProgrammes() - before).toInt().coerceAtLeast(0)
         }
         return added
@@ -78,11 +79,33 @@ class EpgStore(
             if (channels.isNotEmpty()) dao.insertChannels(channels.map(mapper::toEntity))
             if (programmes.isNotEmpty()) {
                 val before = dao.countProgrammes()
-                dao.insertProgrammesMissing(programmes.map(mapper::toEntity))
+                val entities = programmes.map(mapper::toEntity)
+                dao.insertProgrammesMissing(entities)
+                fillDescriptions(entities)
                 added = (dao.countProgrammes() - before).toInt().coerceAtLeast(0)
             }
         }
         return added
+    }
+
+    /**
+     * Дописывает описания уже загруженным передачам.
+     *
+     * Провайдерский гид и публичный могут описывать одну и ту же передачу: название и время
+     * остаются провайдерскими, а описание дозаполняется, если его не было (замечание
+     * Александра 09.11.2026: описаний не было нигде).
+     *
+     * @param entities передачи из импортированной пачки.
+     */
+    private suspend fun fillDescriptions(entities: List<ProgrammeEntity>) {
+        entities.forEach { entity ->
+            val description = entity.description?.takeIf { it.isNotBlank() } ?: return@forEach
+            dao.fillDescription(
+                channelId = entity.channelId,
+                startAt = entity.startAt,
+                description = description,
+            )
+        }
     }
 
     /**

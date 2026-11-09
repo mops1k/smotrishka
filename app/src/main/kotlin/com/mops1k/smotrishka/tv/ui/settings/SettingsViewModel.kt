@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.net.URI
@@ -117,12 +118,51 @@ class SettingsViewModel @Inject constructor(
         initialValue = PlayerSettingsStore.DEFAULT_EPG_WINDOW_HOURS,
     )
 
+    /** Общее смещение гида, часы: применяется к каналам без своего сдвига. */
+    val globalEpgShift: StateFlow<Int> = playerSettingsStore.globalEpgShift.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+        initialValue = 0,
+    )
+
     /** Экономия трафика: без превью и без логотипов. */
     val dataSaver: StateFlow<Boolean> = playerSettingsStore.dataSaver.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
         initialValue = false,
     )
+
+    /** Выбранный язык каналов, `null` — все языки. */
+    val channelLanguage: StateFlow<String?> = playerSettingsStore.channelLanguage.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+        initialValue = null,
+    )
+
+    /** Определять язык канала по названию (`... HD ES`, `... US`). */
+    val languageFromName: StateFlow<Boolean> = playerSettingsStore.languageFromName.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+        initialValue = false,
+    )
+
+    /**
+     * Включает определение языка по названию канала.
+     *
+     * @param enabled разбирать хвост имени канала как язык; влияет на следующий разбор плейлиста.
+     */
+    fun setLanguageFromName(enabled: Boolean) {
+        // Парсер общий: настройка действует при следующем импорте, без перезапуска приложения.
+        parser.languageFromName = enabled
+        viewModelScope.launch { playerSettingsStore.setLanguageFromName(enabled) }
+    }
+
+    /** Языки из плейлиста для выбора: без пустых значений и дублей. */
+    private val languagesState = MutableStateFlow<List<String>>(emptyList())
+
+    /** Языки из плейлиста для выбора. */
+    val languages: StateFlow<List<String>> = languagesState.asStateFlow()
+
 
     /** Лента «Сейчас идёт» на домашнем экране Android TV. */
     val watchNextEnabled: StateFlow<Boolean> = playerSettingsStore.watchNextEnabled.stateIn(
@@ -192,6 +232,17 @@ class SettingsViewModel @Inject constructor(
     }
 
     init {
+        viewModelScope.launch {
+            // Парсер общий для импортов: настройка языка по названию применяется сразу.
+            parser.languageFromName = playerSettingsStore.languageFromName.first()
+        }
+        // Языки для фильтра собираем из плейлиста: список нужен только в настройках.
+        viewModelScope.launch {
+            val values = runCatching {
+                catalogStore.playlist().channels.mapNotNull { it.language?.takeIf(String::isNotBlank) }
+            }.getOrDefault(emptyList())
+            languagesState.value = values.distinct().sorted()
+        }
         // Сообщения фонового импортёра показываем в строке состояния настроек.
         viewModelScope.launch {
             playlistImporter.status.collect { message ->
@@ -362,12 +413,30 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
+     * Меняет общее смещение гида.
+     *
+     * @param hours смещение в часах, допустимо −12…+12.
+     */
+    fun setGlobalEpgShift(hours: Int) {
+        viewModelScope.launch { playerSettingsStore.setGlobalEpgShift(hours) }
+    }
+
+    /**
      * Включает или выключает экономию трафика.
      *
      * @param enabled экономить ли трафик.
      */
     fun setDataSaver(enabled: Boolean) {
         viewModelScope.launch { playerSettingsStore.setDataSaver(enabled) }
+    }
+
+    /**
+     * Выбирает язык каналов для списков.
+     *
+     * @param language язык из плейлиста, `null` — показывать все каналы.
+     */
+    fun setChannelLanguage(language: String?) {
+        viewModelScope.launch { playerSettingsStore.setChannelLanguage(language) }
     }
 
     /**

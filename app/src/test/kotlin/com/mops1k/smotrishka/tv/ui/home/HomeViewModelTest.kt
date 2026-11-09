@@ -377,6 +377,28 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun `возврат из плеера открывает категорию игравшего канала`() = runTest {
+        playlist()
+        guide(
+            EpgChannel(id = "one", displayName = "Первый") to "Новости",
+            EpgChannel(id = "two", displayName = "Киноканал") to "Фильм",
+        )
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content }
+
+        // В плеере переключились на канал из другой категории: на возврате список должен
+        // показать именно его, а не первый канал прежней категории.
+        recentChannels.remember("two")
+        model.refresh(force = true)
+
+        val content = model.state.first {
+            it is HomeUiState.Content && it.selectedChannelId == ChannelId("two")
+        } as HomeUiState.Content
+        assertThat(content.selectedCategoryId).isEqualTo("кино")
+        assertThat(content.channels.map { it.channel.id }).contains(ChannelId("two"))
+    }
+
+    @Test
     fun `поиск фильтрует каналы по подстроке без учёта регистра`() = runTest {
         playlist()
         val model = viewModel()

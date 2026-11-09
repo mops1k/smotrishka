@@ -1,6 +1,8 @@
 package com.mops1k.smotrishka.tv.ui.home.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -29,6 +32,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextAlign
@@ -37,8 +41,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mops1k.smotrishka.tv.core.designsystem.component.TvPanel
 import com.mops1k.smotrishka.tv.core.designsystem.component.TvScrollbar
+import com.mops1k.smotrishka.tv.core.designsystem.component.tvFocusRing
 import com.mops1k.smotrishka.tv.core.designsystem.theme.TvColors
 import com.mops1k.smotrishka.tv.core.designsystem.theme.TvDimens
+import com.mops1k.smotrishka.tv.core.designsystem.theme.TvRadius
 import com.mops1k.smotrishka.tv.core.designsystem.theme.TvType
 import com.mops1k.smotrishka.tv.ui.common.TextFormat
 import com.mops1k.smotrishka.tv.ui.home.ChannelUi
@@ -94,13 +100,15 @@ fun ChannelListPanel(
     onFocusInList: (Boolean) -> Unit = {},
     // Что за список показан (раздел, категория, запрос): по нему сбрасываются прокрутка и фокус.
     listKey: String,
+    // «←» к списку категорий: на тач-экране системной кнопки «назад» нет.
+    onBackToCategories: (() -> Unit)? = null,
 ) {
     TvPanel(
         modifier = modifier.onFocusChanged { onFocusInList(it.hasFocus) },
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             if (title != null) {
-                ListHeader(title = title, count = channels.size)
+                ListHeader(title = title, count = channels.size, onBack = onBackToCategories)
             }
             if (channels.isEmpty()) {
                 EmptyState(title = emptyTitle, subtitle = emptySubtitle)
@@ -130,13 +138,44 @@ fun ChannelListPanel(
 }
 
 /**
+ * Кнопка «←» к списку категорий.
+ *
+ * На тач-экране без системных кнопок вернуться к категориям было нечем: панель категорий
+ * открывалась только обработчиком клавиши «назад» (замечание Александра 09.11.2026).
+ *
+ * @param onClick открыть список категорий.
+ */
+@Composable
+private fun BackToCategories(onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(TvRadius.small)
+    Box(
+        modifier = Modifier
+            .size(28.dp)
+            .clip(shape)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable { onClick() }
+            .tvFocusRing(focused = focused, shape = shape)
+            .focusable(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "←",
+            style = TvType.panelTitle.copy(fontSize = 16.sp),
+            color = if (focused) TvColors.accent else TvColors.muted,
+        )
+    }
+}
+
+/**
  * Шапка панели: высота 69, имя категории 17/600 и счётчик 10 со склонением.
  *
  * @param title имя категории;
- * @param count число каналов в списке.
+ * @param count число каналов в списке;
+ * @param onBack «←» к категориям, `null` — списка категорий нет (раздел, поиск).
  */
 @Composable
-private fun ListHeader(title: String, count: Int) {
+private fun ListHeader(title: String, count: Int, onBack: (() -> Unit)? = null) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -145,6 +184,9 @@ private fun ListHeader(title: String, count: Int) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp, Alignment.Start),
     ) {
+        if (onBack != null) {
+            BackToCategories(onBack)
+        }
         Text(
             text = title,
             style = TvType.panelTitle.copy(fontSize = 15.sp),
@@ -271,9 +313,10 @@ private fun ChannelList(
                     now = now,
                     zone = zone,
                     showLogo = showLogos,
-                    // Заявленный архив показываем сразу; после проверки — только подтверждённые.
-                    hasArchive = item.channel.archive != null &&
-                        (archiveVerified.isEmpty() || item.channel.id.value in archiveVerified),
+                    // Архив показываем так, как заявил плейлист: фоновая проверка давала
+                    // ложные «нет архива» у каналов, где он есть (решение Александра
+                    // 09.11.2026 — доверять плейлисту).
+                    hasArchive = item.channel.archive != null,
                     hasUnstable = item.channel.id.value in unstable,
                     leftTarget = leftTarget,
                     onActivateMenu = onActivateMenu,

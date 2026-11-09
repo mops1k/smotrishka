@@ -58,6 +58,12 @@ class SmotrishkaApplication : Application(), Configuration.Provider {
         updateScheduler.schedulePeriodic()
         // Гид обновляется заранее — за час до конца покрытия, а не по фиксированному интервалу.
         CoroutineScope(Dispatchers.IO).launch {
+            // Пояс устройства учитываем один раз: провайдеры часто отдают сетку без зоны,
+            // и без поправки все передачи уезжают на смещение пояса (замечание 09.11.2026).
+            runCatching { playerSettings.applyAutoEpgShiftOnce() }
+                .onFailure { android.util.Log.e("SmotrishkaSync", "epg shift init failed", it) }
+        }
+        CoroutineScope(Dispatchers.IO).launch {
             runCatching { guideRefreshPlanner.plan() }
                 .onSuccess { delay ->
                     android.util.Log.d("SmotrishkaSync", "гид обновится через $delay мс")

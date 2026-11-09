@@ -3,6 +3,7 @@ package com.mops1k.smotrishka.tv
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -22,6 +23,7 @@ import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.ui.AppNavHost
 import com.mops1k.smotrishka.tv.ui.Route
 import com.mops1k.smotrishka.tv.ui.common.LocalToastController
+import com.mops1k.smotrishka.tv.ui.SearchShortcut
 import com.mops1k.smotrishka.tv.ui.common.rememberDeviceProfile
 import com.mops1k.smotrishka.tv.core.designsystem.component.LocalReduceMotion
 import com.mops1k.smotrishka.tv.ui.common.ToastController
@@ -67,11 +69,7 @@ class MainActivity : ComponentActivity() {
         // Системные панели скрыты для всего приложения, а не только в плеере: интерфейс
         // рассчитан на полный экран, статус-бар и панель навигации перекрывают контент.
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        WindowInsetsControllerCompat(window, window.decorView).apply {
-            hide(WindowInsetsCompat.Type.systemBars())
-            systemBarsBehavior =
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
+        hideSystemBars()
 
         setContent {
             SmotrishkaTvTheme {
@@ -104,6 +102,46 @@ class MainActivity : ComponentActivity() {
         CrashGuard.consumeLast(this)?.let { message ->
             Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         }
+    }
+
+    /**
+     * Скрывает системные панели.
+     *
+     * Android показывает статус-бар после свайпа, возврата из другого приложения и смены
+     * фокуса окна: одного скрытия при старте мало (замечание Александра 09.11.2026 —
+     * были видны статусные строки).
+     */
+    private fun hideSystemBars() {
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        hideSystemBars()
+    }
+
+    /**
+     * Кнопка «Поиск» на пульте открывает строку поиска.
+     *
+     * Нажатие перехватывается здесь, потому что Compose не отдаёт системные клавиши пульта
+     * экрану без фокуса, а поиск должен открываться с любого экрана (замечание 09.11.2026).
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_SEARCH) {
+            if (event.action == KeyEvent.ACTION_UP) SearchShortcut.request()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Панели возвращаются, когда окно теряет и снова получает фокус.
+        if (hasFocus) hideSystemBars()
     }
 
     /**

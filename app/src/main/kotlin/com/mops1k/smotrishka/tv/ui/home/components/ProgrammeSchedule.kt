@@ -310,11 +310,45 @@ private fun ShiftRow(shiftHours: Int, onChangeShift: (Int) -> Unit) {
             style = TvType.caption,
             color = if (focused) TvColors.focusOutline else TvColors.nowLabel,
         )
-        Text(
-            text = value,
-            style = TvType.caption,
-            color = if (focused) TvColors.focusOutline else TvColors.text,
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            ShiftButton(label = "−1 ч", onClick = { onChangeShift(-1) })
+            Text(
+                text = value,
+                style = TvType.caption,
+                color = if (focused) TvColors.focusOutline else TvColors.text,
+            )
+            ShiftButton(label = "+1 ч", onClick = { onChangeShift(1) })
+        }
+    }
+}
+
+/**
+ * Кнопка сдвига гида для тача.
+ *
+ * Пультом то же самое делает строка стрелками, но тачем стрелок нет: без кнопок сдвиг
+ * канала было не настроить (замечание Александра 09.11.2026).
+ *
+ * @param label подпись кнопки;
+ * @param onClick изменение сдвига на час.
+ */
+@Composable
+private fun ShiftButton(label: String, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(TvRadius.item))
+            .background(TvColors.rowSelectedStart)
+            .clickable(onClick = onClick)
+            .onFocusChanged { focused = it.isFocused }
+            .tvFocusRing(focused = focused, shape = RoundedCornerShape(TvRadius.item))
+            .focusable()
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text = label, style = TvType.caption, color = TvColors.text)
     }
 }
 

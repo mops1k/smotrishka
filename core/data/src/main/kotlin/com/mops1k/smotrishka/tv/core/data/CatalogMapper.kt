@@ -32,6 +32,7 @@ class CatalogMapper(private val gson: Gson = Gson()) {
             logoUrl = channel.logoUrl,
             categoryId = channel.categoryId,
             epgId = channel.epgId,
+            language = channel.language,
             archiveMode = channel.archive?.mode?.name,
             archiveSource = channel.archive?.source,
             archiveDays = channel.archive?.days ?: 0,
@@ -46,6 +47,7 @@ class CatalogMapper(private val gson: Gson = Gson()) {
             logoUrl = entity.logoUrl,
             categoryId = entity.categoryId,
             epgId = entity.epgId,
+            language = entity.language,
             archive = entity.archiveMode?.let { mode ->
                 ArchiveInfo(
                     mode = parseMode(mode),

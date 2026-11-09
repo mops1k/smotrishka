@@ -39,6 +39,24 @@ class M3uParserTest {
     }
 
     @Test
+    fun `разбирает язык канала из tvg-language`() {
+        val playlist = parseOk(
+            """
+            #EXTM3U
+            #EXTINF:-1 tvg-id="one" tvg-language="Русский" group-title="Кино",Первый
+            http://example.com/one.m3u8
+            #EXTINF:-1 tvg-id="two" group-title="Кино",Второй
+            http://example.com/two.m3u8
+            """.trimIndent(),
+        )
+
+        val channels = playlist.channels
+        assertThat(channels[0].language).isEqualTo("Русский")
+        // Канал без метки языка: `null`, а не пустая строка — фильтр по языку это учитывает.
+        assertThat(channels[1].language).isNull()
+    }
+
+    @Test
     fun `разбирает атрибуты в кавычках`() {
         val playlist = parseOk(
             """

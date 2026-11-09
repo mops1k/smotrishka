@@ -28,6 +28,8 @@ data class ChannelEntity(
     val logoUrl: String?,
     val categoryId: String?,
     val epgId: String?,
+    // Язык канала: метка `tvg-language` или языковая группа; `null` — канал без метки.
+    val language: String?,
     val archiveMode: String?,
     val archiveSource: String?,
     val archiveDays: Int,
