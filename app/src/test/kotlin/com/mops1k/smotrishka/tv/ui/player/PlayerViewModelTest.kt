@@ -306,4 +306,77 @@ class PlayerViewModelTest {
         assertThat(scope.map { it.id }).containsExactly("a", "b", "c").inOrder()
         assertThat(pair).isEqualTo("a" to "c")
     }
+
+    @Test
+    fun `в оверлее каналов у строки есть архив, описание и время передачи`() = runTest {
+        catalogStore.replaceCatalog(
+            Playlist(
+                categories = listOf(Category(id = "кино", name = "Кино")),
+                channels = listOf(
+                    Channel(
+                        id = ChannelId("arch"),
+                        name = "Архивный",
+                        streamUrl = "http://example.test/arch/index.m3u8",
+                        logoUrl = null,
+                        categoryId = "кино",
+                        archive = ArchiveInfo(mode = CatchupMode.DEFAULT, days = 7),
+                    ),
+                ),
+            ),
+        )
+        epgStore.replace(
+            Epg(
+                channels = listOf(EpgChannel(id = "arch", displayName = "Архивный")),
+                programmes = listOf(
+                    Programme(
+                        channelId = "arch",
+                        title = "Идёт сейчас",
+                        description = "Рассказ о канале",
+                        start = now.minusSeconds(1800),
+                        end = now.plusSeconds(1800),
+                    ),
+                ),
+            ),
+        )
+
+        val scope = viewModel("arch")
+            .channelsInScope
+            .first { list -> list.any { it.programmeDescription != null } }
+        val row = scope.first { it.id == "arch" }
+
+        assertThat(row.hasArchive).isTrue()
+        assertThat(row.programmeTitle).isEqualTo("Идёт сейчас")
+        assertThat(row.programmeDescription).isEqualTo("Рассказ о канале")
+        assertThat(row.programmeStart).isEqualTo(now.minusSeconds(1800))
+        assertThat(row.programmeEnd).isEqualTo(now.plusSeconds(1800))
+    }
+
+    @Test
+    fun `в недавних каналах у строки есть описание текущей передачи`() = runTest {
+        playlist()
+        epgStore.replace(
+            Epg(
+                channels = listOf(EpgChannel(id = "one", displayName = "Первый")),
+                programmes = listOf(
+                    Programme(
+                        channelId = "one",
+                        title = "Идёт сейчас",
+                        description = "Рассказ о канале",
+                        start = now.minusSeconds(1800),
+                        end = now.plusSeconds(1800),
+                    ),
+                ),
+            ),
+        )
+
+        val recents = viewModel("one")
+            .recents
+            .first { list -> list.any { it.programmeDescription != null } }
+        val row = recents.first { it.id == "one" }
+
+        assertThat(row.hasArchive).isFalse()
+        assertThat(row.programmeTitle).isEqualTo("Идёт сейчас")
+        assertThat(row.programmeDescription).isEqualTo("Рассказ о канале")
+        assertThat(row.programmeStart).isEqualTo(now.minusSeconds(1800))
+    }
 }

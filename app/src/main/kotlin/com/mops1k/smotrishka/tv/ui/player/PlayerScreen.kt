@@ -19,7 +19,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Arrangement
@@ -131,9 +130,10 @@ import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.ui.home.ProgrammeProgress
 import com.mops1k.smotrishka.tv.ui.home.ProgrammeRowUi
 import com.mops1k.smotrishka.tv.ui.home.ProgrammeStatus
-import com.mops1k.smotrishka.tv.ui.home.components.ChannelLogo
+import com.mops1k.smotrishka.tv.ui.player.osd.ChannelListOverlay
 import com.mops1k.smotrishka.tv.ui.player.osd.OsdCircleButton
 import com.mops1k.smotrishka.tv.ui.player.osd.PlayerOsdTop
+import com.mops1k.smotrishka.tv.ui.player.osd.RecentsOverlay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineScope
@@ -307,20 +307,26 @@ private fun PlayerContent(
     // Таймер удержания «назад»: короткое нажатие выходит, удержание открывает недавние.
     var backHeld by remember { mutableStateOf(false) }
     var backPressJob by remember { mutableStateOf<Job?>(null) }
+    // Нажата ли клавиша «назад» прямо сейчас: по этому таймер понимает, что её держат.
+    var backKeyDown by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    // Отдельный Job на распознавание удержания «назад».
-    val backPressScope = scope
     val controls = rememberPlayerControls(hideSeconds = osdHideSeconds)
     val controlsState by controls.state.collectAsStateWithLifecycle()
 
-    // «Назад» закрывает открытый оверлей и только при полностью закрытых оверлеях выходит
-    // из плеера. Долгое удержание «назад» открывает «Недавние» — это отдельная ветка
-    // обработчика клавиш (замечание Александра 09.11.2026).
-    BackHandler(enabled = true) {
+    /** Закрывает открытый оверлей, а если открывать нечего — выходит из плеера. */
+    fun closeOverlayOrExit() {
+        val action = when {
+            channelsVisible -> "закрываю каналы"
+            recentsVisible -> "закрываю недавние"
+            programmeVisible -> "закрываю телепрограмму"
+            controlsState.osdVisible -> "прячу меню"
+            else -> "выход из плеера"
+        }
         android.util.Log.d(
             "SmotrishkaBack",
-            "назад: каналы=$channelsVisible недавние=$recentsVisible " +
-                "программа=$programmeVisible осд=${controlsState.osdVisible}",
+            "назад: действие=$action каналы=$channelsVisible недавние=$recentsVisible " +
+                "программа=$programmeVisible осд=${controlsState.osdVisible} " +
+                "клавиша=$backKeyDown удержание=$backHeld",
         )
         when {
             channelsVisible -> channelsVisible = false
@@ -329,6 +335,21 @@ private fun PlayerContent(
             controlsState.osdVisible -> controls.hideOsd()
             else -> onBack()
         }
+    }
+
+    // «Назад» клавишей пульта целиком обрабатывает обработчик клавиш (он же потребляет
+    // событие, иначе ColorOS закрывает приложение на удержании). BackHandler остаётся для
+    // системного жеста «назад» на телефоне: там клавишных событий нет.
+    BackHandler(enabled = true) {
+        android.util.Log.d("SmotrishkaBack", "BackHandler: жест назад")
+        backPressJob?.cancel()
+        backPressJob = null
+        // Отпускание, которым закончилось удержание: «Недавние» уже открыты, выходить нельзя.
+        if (backHeld) {
+            backHeld = false
+            return@BackHandler
+        }
+        closeOverlayOrExit()
     }
 
     // Одновременно открыт только один оверлей: список каналов, недавние, программа или меню.
@@ -911,37 +932,56 @@ private fun PlayerContent(
                 // телепрограмма), OK принадлежит ему, а не OSD плеера (указание 07.11.2026).
                 val overlayOpen = channelsVisible || recentsVisible || programmeVisible
                 if (event.key == Key.Back) {
-                    // Выход больше не ждёт KeyUp: на этой приставке отпускание клавиши до
-                    // обработчика не доходило, и из плеера нельзя было выйти вообще.
-                    // Короткое нажатие выходит сразу; удержание (повторные KeyDown) открывает
-                    // панель недавних каналов.
+                    // Клавишу потребляем целиком, включая повторы: если отдать удержание
+                    // системе, ColorOS принудительно закрывает приложение на третьем повторе
+                    // (`Force stopping ... from pid system` в logcat, проверено 09.11.2026).
+                    // Короткое нажатие закрывает оверлей/выходит, удержание открывает «Недавние».
                     when (event.type) {
                         KeyEventType.KeyDown -> {
+                            android.util.Log.d(
+                                "SmotrishkaBack",
+                                "клавиша вниз repeat=${event.nativeKeyEvent.repeatCount}",
+                            )
                             if (event.nativeKeyEvent.repeatCount == 0) {
+                                backKeyDown = true
                                 backHeld = false
                                 backPressJob?.cancel()
                                 backPressJob = scope.launch {
                                     delay(LONG_BACK_PRESS_MS)
+                                    android.util.Log.d(
+                                        "SmotrishkaBack",
+                                        "таймер сработал: клавиша=$backKeyDown",
+                                    )
+                                    if (!backKeyDown) return@launch
                                     backHeld = true
+                                    // Одновременно открыта только одна панель: если была
+                                    // открыта другая, удержание открывает «Недавние» вместо неё.
+                                    channelsVisible = false
+                                    programmeVisible = false
                                     // OSD прячем: иначе он рисуется поверх панели недавних
                                     // и перекрывает её.
                                     controls.hideOsd()
                                     recentsVisible = true
+                                    android.util.Log.d("SmotrishkaBack", "удержание: открыл недавние")
                                 }
                             }
                             true
                         }
                         KeyEventType.KeyUp -> {
+                            // Отпускание: короткое нажатие закрывает оверлей или выходит;
+                            // после удержания «Недавние» уже открыты, делать нечего.
+                            android.util.Log.d("SmotrishkaBack", "клавиша вверх")
+                            backKeyDown = false
                             backPressJob?.cancel()
                             backPressJob = null
-                            // Короткое нажатие обрабатывает BackHandler: он один знает,
-                            // закрывать оверлей или выходить. Здесь только гасим удержание,
-                            // иначе одно нажатие закрывало оверлей и сразу выходило из плеера
-                            // (замечание Александра 09.11.2026).
-                            backHeld = false
+                            if (backHeld) {
+                                backHeld = false
+                            } else {
+                                closeOverlayOrExit()
+                            }
                             true
                         }
-                        else -> false
+                        else -> true
                     }
                 } else if (
                     event.key == Key.Enter ||
@@ -1239,184 +1279,29 @@ private fun PlayerContent(
         }
 
         if (recentsVisible) {
-            // Панель недавних каналов устроена так же, как список каналов: тот же LazyColumn,
-            // тот же фокус и та же подсветка. Раньше здесь был простой Column, и пульт
-            // не мог по строкам ходить.
-            val recentsState = rememberLazyListState()
-            val currentRecent = remember { FocusRequester() }
-            LaunchedEffect(recentsVisible, recents.size) {
-                withFrameNanos { }
-                runCatching { currentRecent.requestFocus() }
-            }
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.94f))
-                    .padding(horizontal = 48.dp, vertical = 28.dp),
-            ) {
-                Text(
-                    text = "Недавние каналы",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
-                )
-                Spacer(Modifier.height(12.dp))
-                LazyColumn(state = recentsState, modifier = Modifier.weight(1f)) {
-                    items(items = recents, key = { it.id }) { item ->
-                        val current = item.id == channel.channelId.value
-                        var rowFocused by remember { mutableStateOf(false) }
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (rowFocused) TvColors.accent else Color.Transparent)
-                                .onFocusChanged { rowFocused = it.isFocused }
-                                .then(
-                                    if (current) Modifier.focusRequester(currentRecent) else Modifier,
-                                )
-                                .clickable {
-                                    recentsVisible = false
-                                    onOpenRecent(item.id)
-                                }
-                                .focusable()
-                                .then(
-                                    if (rowFocused) {
-                                        Modifier.border(
-                                            3.dp,
-                                            TvColors.focusOutline,
-                                            RoundedCornerShape(8.dp),
-                                        )
-                                    } else {
-                                        Modifier
-                                    },
-                                )
-                                .padding(vertical = 8.dp, horizontal = 8.dp),
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                ChannelLogo(name = item.name, url = item.logoUrl, size = 32.dp)
-                                Spacer(Modifier.width(10.dp))
-                                Text(
-                                    text = item.name,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = when {
-                                        rowFocused -> Color(0xFF100A1E)
-                                        current -> TvColors.accent
-                                        else -> Color.White
-                                    },
-                                    fontWeight = if (current || rowFocused) FontWeight.Medium else FontWeight.Normal,
-                                    maxLines = 1,
-                                )
-                            }
-                            // Текущая передача — как в списке каналов OSD, тонким шрифтом.
-                            item.programmeTitle?.let { title ->
-                                Text(
-                                    text = title,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Light,
-                                    modifier = Modifier.padding(start = 42.dp),
-                                    color = when {
-                                        rowFocused -> Color(0xFF100A1E).copy(alpha = 0.75f)
-                                        current -> TvColors.accent.copy(alpha = 0.8f)
-                                        else -> Color.White.copy(alpha = 0.65f)
-                                    },
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            // Панель недавних каналов: слева список с передачами и меткой архива, справа
+            // описание текущей передачи — та же раскладка, что у оверлея телепрограммы.
+            RecentsOverlay(
+                recents = recents,
+                currentChannelId = channel.channelId.value,
+                onSelect = { id ->
+                    recentsVisible = false
+                    onOpenRecent(id)
+                },
+            )
         }
 
         if (channelsVisible) {
             // Полный список каналов категории: открывается «влево» при скрытом OSD,
             // выбор переключает канал и остаётся в плеере, «назад» закрывает список.
-            val listState = rememberLazyListState()
-            val currentRequester = remember { FocusRequester() }
-            val currentIndex = channels.indexOfFirst { it.id == channel.channelId.value }
-            LaunchedEffect(channelsVisible, channels.size) {
-                // Фокус сразу на текущем канале: иначе пульт начинал бы с первой строки.
-                if (currentIndex >= 0) listState.scrollToItem(currentIndex)
-                withFrameNanos { }
-                runCatching { currentRequester.requestFocus() }
-            }
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.94f))
-                    .padding(horizontal = 48.dp, vertical = 28.dp),
-            ) {
-                Text(
-                    text = "Каналы",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
-                )
-                Spacer(Modifier.height(12.dp))
-                LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
-                    items(items = channels, key = { it.id }) { item ->
-                        val current = item.id == channel.channelId.value
-                        var rowFocused by remember { mutableStateOf(false) }
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (rowFocused) TvColors.accent else Color.Transparent)
-                                .onFocusChanged { rowFocused = it.isFocused }
-                                .clickable {
-                                    channelsVisible = false
-                                    onSwitchChannel(item.id)
-                                }
-                                .then(
-                                    if (current) {
-                                        Modifier.focusRequester(currentRequester)
-                                    } else {
-                                        Modifier
-                                    },
-                                )
-                                .focusable()
-                                .padding(vertical = 6.dp, horizontal = 8.dp),
-                        ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            ChannelLogo(
-                                name = item.name,
-                                url = item.logoUrl,
-                                size = 32.dp,
-                            )
-                            Spacer(Modifier.width(10.dp))
-                        Text(
-                            text = item.name,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = when {
-                                // Фокус в списке каналов поверх плеера: инверсия, чтобы
-                                // строка под пультом читалась сразу.
-                                rowFocused -> Color(0xFF100A1E)
-                                current -> MaterialTheme.colorScheme.primary
-                                else -> Color.White
-                            },
-                            fontWeight = if (current || rowFocused) FontWeight.Medium else FontWeight.Normal,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        }
-                            item.programmeTitle?.let { title ->
-                                Text(
-                                    text = title,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Light,
-                                    modifier = Modifier.padding(start = 42.dp),
-                                    color = when {
-                                        rowFocused -> Color(0xFF100A1E).copy(alpha = 0.75f)
-                                        current -> MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
-                                        else -> Color.White.copy(alpha = 0.65f)
-                                    },
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            ChannelListOverlay(
+                channels = channels,
+                currentChannelId = channel.channelId.value,
+                onSelect = { id ->
+                    channelsVisible = false
+                    onSwitchChannel(id)
+                },
+            )
         }
 
         // Кнопки переключения каналов для тача: по краям, внизу, пока показан OSD.
@@ -2104,8 +1989,14 @@ private const val LIVE_WINDOW_SECONDS = 60L
 /** Через сколько превью молча перезапускается, если поток встал (три интервала сторожа). */
 private val PREVIEW_RESTART_AFTER = PlayerRecovery.WATCHDOG_INTERVAL * 3
 
-/** Порог удержания «назад» для панели недавних каналов. */
-private const val LONG_BACK_PRESS_MS = 600L
+/**
+ * Порог удержания «назад» для панели недавних каналов.
+ *
+ * 300 мс, а не 600: на части прошивок (Realme/ColorOS) удержание «назад» — системная функция,
+ * она останавливает приложение через ~500 мс, и панель успевает показаться только при меньшем
+ * пороге (как в других IPTV-клиентах). Решение Александра 09.11.2026.
+ */
+private const val LONG_BACK_PRESS_MS = 300L
 
 /** Как часто проверяем поведение прямого потока. */
 /** Диаметр кружка-ползунка на полосе прогресса. */

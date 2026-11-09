@@ -16,10 +16,15 @@
         android:name="android.hardware.touchscreen"
         android:required="false" />
 
+    <!-- Predictive back (Android 13+) перехватывает KEYCODE_BACK до Compose: нажатие
+         обрабатывалось дважды — нашим обработчиком и системным BackHandler, из-за чего
+         плеер закрывался вместо панели. Новый путь отключён; системный жест «назад»
+         на телефоне работает через прежний обработчик (решение Александра 09.11.2026). -->
     <application
         android:name=".SmotrishkaApplication"
         android:allowBackup="true"
         android:banner="@drawable/app_banner"
+        android:enableOnBackInvokedCallback="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"

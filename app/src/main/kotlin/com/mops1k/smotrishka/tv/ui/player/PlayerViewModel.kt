@@ -142,12 +142,6 @@ class PlayerViewModel @Inject constructor(
     }
 
     /**
-     * Дополняет каналы названием текущей передачи.
-     *
-     * Один запрос на весь список: гида по каналу в отдельности — сотни обращений, и список
-     * в OSD открывался бы секундами.
-     */
-    /**
      * Логотипы каналов по идентификаторам.
      *
      * У каталога провайдера адресов иконок часто нет, а в гиде они есть: берём иконку гида
@@ -168,18 +162,29 @@ class PlayerViewModel @Inject constructor(
         scope: List<ChannelRef>,
         catalog: List<Channel>,
     ): List<ChannelRef> {
-        val titles = programmeTitles(catalog)
+        val programmes = nowProgrammes(catalog)
         val logos = logoUrls(catalog)
-        return scope.map { ref -> ref.copy(programmeTitle = titles[ref.id], logoUrl = logos[ref.id]) }
+        return scope.map { ref ->
+            val programme = programmes[ref.id]
+            ref.copy(
+                programmeTitle = programme?.title,
+                programmeDescription = programme?.description,
+                programmeStart = programme?.start,
+                programmeEnd = programme?.end,
+                logoUrl = logos[ref.id],
+            )
+        }
     }
 
     /**
-     * Названия текущих передач по идентификаторам каналов.
+     * Текущие передачи по идентификаторам каналов.
      *
      * Один запрос к гиду на весь набор: по одному запросу на канал список открывался бы
-     * секундами, а на панели недавних — тем более.
+     * секундами, а на панели недавних — тем более. Границы передачи показываются со сдвигом
+     * гида канала, как в OSD и на главном экране: иначе полоса прогресса и подпись «до HH:MM»
+     * разъезжаются с тем, что человек видит в эфире.
      */
-    private suspend fun programmeTitles(channels: List<Channel>): Map<String, String?> {
+    private suspend fun nowProgrammes(channels: List<Channel>): Map<String, NowProgramme> {
         if (channels.isEmpty()) return emptyMap()
         val now = clock.instant()
         // Сохранённые связи каналов с гидом: сопоставление по названиям (чтение всей
@@ -193,16 +198,41 @@ class PlayerViewModel @Inject constructor(
         } else {
             epgMatcher.match(channels, epgStore.epgChannels()).matches
         }
+        val shifts = channelShifts(channels)
+        // Окно расширяем на максимальный сдвиг: у канала со сдвигом «сейчас» уезжает в сторону,
+        // и передача, идущая в этот момент, иначе не попадёт в выборку.
+        val maxShift = shifts.values.maxOrNull()?.coerceAtLeast(0L) ?: 0L
         val programmes = epgStore.programmesByChannel(
-            from = now.minus(6, ChronoUnit.HOURS),
+            from = now.minus(6, ChronoUnit.HOURS).minusSeconds(maxShift),
             to = now.plus(2, ChronoUnit.HOURS),
         )
+        return channels.mapNotNull { channel ->
+            val epgId = matches[channel.id] ?: return@mapNotNull null
+            val shiftSeconds = shifts[channel.id.value] ?: 0L
+            val at = now.minusSeconds(shiftSeconds)
+            val current = programmes[epgId]
+                ?.firstOrNull { !it.start.isAfter(at) && it.end.isAfter(at) }
+                ?: return@mapNotNull null
+            channel.id.value to NowProgramme(
+                title = current.title,
+                description = current.description,
+                start = current.start.plusSeconds(shiftSeconds),
+                end = current.end.plusSeconds(shiftSeconds),
+            )
+        }.toMap()
+    }
+
+    /**
+     * Сдвиги гида каналов в секундах.
+     *
+     * Свой сдвиг канала важнее общего (решение Александра 09.11.2026) — то же правило,
+     * что у OSD и списка каналов.
+     */
+    private suspend fun channelShifts(channels: List<Channel>): Map<String, Long> {
+        val own = runCatching { settingsStore.epgShifts.first() }.getOrDefault(emptyMap())
+        val global = runCatching { settingsStore.globalEpgShift.first() }.getOrDefault(0)
         return channels.associate { channel ->
-            val epgId = matches[channel.id]
-            channel.id.value to epgId
-                ?.let { programmes[it] }
-                ?.firstOrNull { !it.start.isAfter(now) && it.end.isAfter(now) }
-                ?.title
+            channel.id.value to (own[channel.id.value] ?: global).toLong() * 60L * 60L
         }
     }
 
@@ -316,26 +346,45 @@ class PlayerViewModel @Inject constructor(
     /** Режим кадра. */
     val aspectMode: Flow<AspectMode> = settingsStore.aspectMode
 
-    /** Недавние каналы: свежие первыми, с названием текущей передачи, как в списке каналов. */
+    /** Недавние каналы: свежие первыми, с текущей передачей и её описанием, как в списке каналов. */
     val recents: Flow<List<RecentChannelRef>> = recentChannels.channels.transform { ids ->
         val catalog = catalogStore.playlist().channels
         val byId = catalog.associateBy { it.id.value }
         val items = ids.mapNotNull { id -> byId[id] }
-        // Сначала только названия: панель не должна ждать гид.
-        emit(items.map { RecentChannelRef(id = it.id.value, name = it.name) })
-        val titles = programmeTitles(items)
+        // Сначала только названия: панель не должна ждать гид. Архив известен сразу —
+        // он приходит из плейлиста, а не из гида.
+        emit(items.map { it.toRecentRef() })
+        val programmes = nowProgrammes(items)
         val logos = logoUrls(items)
         emit(
             items.map { channel ->
-                RecentChannelRef(
-                    id = channel.id.value,
-                    name = channel.name,
+                channel.toRecentRef(
                     logoUrl = channel.logoUrl?.takeIf { it.isNotBlank() } ?: logos[channel.id.value],
-                    programmeTitle = titles[channel.id.value],
+                    programme = programmes[channel.id.value],
                 )
             },
         )
     }
+
+    /**
+     * Строка панели «Недавние».
+     *
+     * @param logoUrl логотип для показа (каталог, иначе иконка гида);
+     * @param programme текущая передача канала, `null` — гид её не знает.
+     */
+    private fun Channel.toRecentRef(
+        logoUrl: String? = this.logoUrl?.takeIf { it.isNotBlank() },
+        programme: NowProgramme? = null,
+    ) = RecentChannelRef(
+        id = id.value,
+        name = name,
+        logoUrl = logoUrl,
+        hasArchive = archive != null,
+        programmeTitle = programme?.title,
+        programmeDescription = programme?.description,
+        programmeStart = programme?.start,
+        programmeEnd = programme?.end,
+    )
 
     /** Переключает режим кадра по кругу и запоминает выбор. */
     fun cycleAspectMode(current: AspectMode) {

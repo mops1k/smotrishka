@@ -1,20 +1,30 @@
 package com.mops1k.smotrishka.tv.ui.player
 
 import com.mops1k.smotrishka.tv.core.model.Channel
+import java.time.Instant
 
 /**
- * Канал в списке плеера: для оверлея и переключения достаточно идентификатора и названия.
+ * Канал в списке плеера: для оверлея и переключения достаточно идентификатора и названия,
+ * а строке панели ещё нужны признаки текущей передачи и архива.
  *
  * @param id идентификатор канала в каталоге;
- * @param name название для показа.
+ * @param name название для показа;
+ * @param hasArchive у канала есть архив по заявке плейлиста;
+ * @param programmeTitle текущая передача: показывается под названием тонким шрифтом;
+ * @param programmeDescription описание текущей передачи из гида (`null` — провайдер не дал);
+ * @param programmeStart начало текущей передачи (со сдвигом гида);
+ * @param programmeEnd конец текущей передачи (со сдвигом гида).
  */
 data class ChannelRef(
     val id: String,
     val name: String,
     // Логотип канала: у каталога провайдера его часто нет, тогда берём иконку из гида.
     val logoUrl: String? = null,
-    // Передача, которая идёт сейчас: показывается под названием тонким шрифтом.
+    val hasArchive: Boolean = false,
     val programmeTitle: String? = null,
+    val programmeDescription: String? = null,
+    val programmeStart: Instant? = null,
+    val programmeEnd: Instant? = null,
 )
 
 /**
@@ -53,7 +63,15 @@ object ChannelListScope {
 
         return scoped
             .sortedBy { it.name.lowercase() }
-            .map { ChannelRef(id = it.id.value, name = it.name) }
+            .map {
+                ChannelRef(
+                    id = it.id.value,
+                    name = it.name,
+                    // Архив показываем так, как заявил плейлист: фоновая проверка выдачи давала
+                    // ложные «нет архива» у каналов, где он есть (решение Александра 09.11.2026).
+                    hasArchive = it.archive != null,
+                )
+            }
     }
 }
 
@@ -62,11 +80,19 @@ object ChannelListScope {
  *
  * @param id идентификатор канала в каталоге;
  * @param name название канала;
- * @param programmeTitle передача, которая идёт сейчас (если гид её знает).
+ * @param hasArchive у канала есть архив по заявке плейлиста;
+ * @param programmeTitle передача, которая идёт сейчас (если гид её знает);
+ * @param programmeDescription описание текущей передачи из гида (`null` — провайдер не дал);
+ * @param programmeStart начало текущей передачи (со сдвигом гида);
+ * @param programmeEnd конец текущей передачи (со сдвигом гида).
  */
 data class RecentChannelRef(
     val id: String,
     val name: String,
     val logoUrl: String? = null,
+    val hasArchive: Boolean = false,
     val programmeTitle: String? = null,
+    val programmeDescription: String? = null,
+    val programmeStart: Instant? = null,
+    val programmeEnd: Instant? = null,
 )
