@@ -50,6 +50,27 @@ jobs:
           :core:playlist:testDebugUnitTest
           :app:testDebugUnitTest
 
+      # Постоянный отладочный ключ: без него каждый прогон подписывал debug-APK свежим
+      # ключом раннера, и новая сборка не ставилась поверх предыдущей.
+      # Секрета нет — debug подпишется ключом раннера (как раньше), сборка не падает.
+      - name: Распаковать отладочный ключ
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEBUG_KEYSTORE_BASE64}" ]; then
+            echo "Секрет DEBUG_KEYSTORE_BASE64 не задан — debug подпишется ключом раннера" >&2
+            exit 0
+          fi
+          echo "$DEBUG_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/debug.jks"
+          {
+            echo "DEBUG_KEYSTORE_FILE=$RUNNER_TEMP/debug.jks"
+            echo "DEBUG_KEYSTORE_PASSWORD=android"
+            echo "DEBUG_KEY_ALIAS=androiddebugkey"
+            echo "DEBUG_KEY_PASSWORD=android"
+          } >> "$GITHUB_ENV"
+          ls -l "$RUNNER_TEMP/debug.jks"
+
       - name: Сборка debug APK
         run: ./gradlew --no-daemon --console=plain :app:assembleDebug
 

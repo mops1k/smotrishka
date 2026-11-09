@@ -24,6 +24,32 @@ val releaseSigning: Properties? = System.getenv("RELEASE_KEYSTORE_FILE")
     }
     ?: releaseKeystoreProps
 
+/** Локальный постоянный отладочный ключ: ~/.android-keystores/smotrishka-debug.properties. */
+val debugKeystoreProps: Properties? = run {
+    val file = File(System.getProperty("user.home"), ".android-keystores/smotrishka-debug.properties")
+    if (!file.exists()) null else Properties().apply { file.inputStream().use { load(it) } }
+}
+
+/**
+ * Подпись debug-сборок постоянным ключом: сначала окружение CI (`DEBUG_KEYSTORE_FILE`),
+ * затем локальный файл ключей, иначе — штатный отладочный ключ Gradle.
+ *
+ * Зачем: отладочный ключ Gradle генерирует сам, и он уникален для каждой машины и каждого
+ * прогона CI. Из-за этого debug-APK из CI не устанавливался поверх предыдущего выпуска —
+ * Android отказывал с «ключи приложений разные» (0.1.0-rc.3 против 0.1.0-rc.4).
+ */
+val debugSigning: Properties? = System.getenv("DEBUG_KEYSTORE_FILE")
+    ?.takeIf { it.isNotBlank() }
+    ?.let { path ->
+        Properties().apply {
+            setProperty("storeFile", path)
+            setProperty("storePassword", System.getenv("DEBUG_KEYSTORE_PASSWORD").orEmpty())
+            setProperty("keyAlias", System.getenv("DEBUG_KEY_ALIAS").orEmpty())
+            setProperty("keyPassword", System.getenv("DEBUG_KEY_PASSWORD").orEmpty())
+        }
+    }
+    ?: debugKeystoreProps
+
 /**
  * Версия приложения: из CI (`-PversionName`/`-PversionCode` или переменные окружения),
  * иначе — значения по умолчанию этой машины. Релизный workflow берёт версию из тега.
@@ -56,6 +82,18 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Постоянный отладочный ключ (см. debugSigning): без него debug-APK из CI
+            // подписывались одноразовым ключом раннера и не обновлялись на устройстве.
+            signingConfig = debugSigning?.let { props ->
+                signingConfigs.create("debugPersistent") {
+                    storeFile = File(props.getProperty("storeFile"))
+                    storePassword = props.getProperty("storePassword")
+                    keyAlias = props.getProperty("keyAlias")
+                    keyPassword = props.getProperty("keyPassword")
+                }
+            } ?: signingConfigs.getByName("debug")
+        }
         release {
             // R8 и вырезание неиспользуемых ресурсов: на слабых приставках это главный
             // рычаг — в debug-сборке dex раздут настолько, что код уезжает в swap.
