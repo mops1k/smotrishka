@@ -125,6 +125,7 @@ import com.mops1k.smotrishka.tv.SessionLog
 import com.mops1k.smotrishka.tv.core.data.AspectMode
 import com.mops1k.smotrishka.tv.core.data.AudioLanguage
 import com.mops1k.smotrishka.tv.core.data.VideoQuality
+import com.mops1k.smotrishka.tv.ui.common.OverlaySurface
 import com.mops1k.smotrishka.tv.ui.common.WithoutFontScale
 import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.ui.home.ProgrammeProgress
@@ -884,10 +885,16 @@ private fun PlayerContent(
             // Касание пустого места переключает OSD. Именно касание, а не clickable:
             // clickable на ТВ ловит и нажатие OK с пульта (фокус на этом же Box), из-за чего
             // OSD показывался обработчиком клавиши и тут же прятался кликом.
-            .pointerInput(controlsState.osdVisible, channelsVisible) {
+            // Оверлеи взаимоисключающие: пока открыт любой из них, касание видео не открывает
+            // OSD, а закрывает открытый оверлей (замечание Александра 10.11.2026).
+            .pointerInput(controlsState.osdVisible, channelsVisible, recentsVisible, programmeVisible) {
                 detectTapGestures {
-                    if (!channelsVisible) {
-                        if (controlsState.osdVisible) controls.hideOsd() else controls.onInteraction()
+                    when {
+                        programmeVisible -> programmeVisible = false
+                        recentsVisible -> recentsVisible = false
+                        channelsVisible -> Unit
+                        controlsState.osdVisible -> controls.hideOsd()
+                        else -> controls.onInteraction()
                     }
                 }
             }
@@ -1165,18 +1172,7 @@ private fun PlayerContent(
                 withFrameNanos { }
                 runCatching { currentProgramme.requestFocus() }
             }
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.94f))
-                    .padding(horizontal = 48.dp, vertical = 28.dp),
-            ) {
-                Text(
-                    text = "Телепрограмма",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
-                )
-                Spacer(Modifier.height(12.dp))
+            OverlaySurface(title = "Телепрограмма") {
                 if (schedule.isEmpty()) {
                     Text(
                         text = "Программы нет",

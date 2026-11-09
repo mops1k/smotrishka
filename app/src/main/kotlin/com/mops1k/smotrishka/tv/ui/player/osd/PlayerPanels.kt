@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import com.mops1k.smotrishka.tv.core.designsystem.theme.TvColors
 import com.mops1k.smotrishka.tv.core.designsystem.theme.TvDimens
 import com.mops1k.smotrishka.tv.ui.common.TextFormat
+import com.mops1k.smotrishka.tv.ui.common.OverlaySurface
 import com.mops1k.smotrishka.tv.ui.home.components.ArchiveBadge
 import com.mops1k.smotrishka.tv.ui.home.components.ChannelLogo
 import com.mops1k.smotrishka.tv.ui.player.ChannelRef
@@ -178,18 +179,7 @@ private fun ChannelOverlay(
         runCatching { currentFocus.requestFocus() }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.94f))
-            .padding(horizontal = 48.dp, vertical = 28.dp),
-    ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            color = Color.White,
-        )
-        Spacer(Modifier.height(12.dp))
+    OverlaySurface(title = title, modifier = modifier) {
         LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
             items(items = rows, key = { it.id }) { row ->
                 ChannelOverlayRow(
