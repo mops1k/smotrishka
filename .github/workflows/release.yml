@@ -149,16 +149,24 @@ jobs:
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
           set -euo pipefail
-          assets=(
-            "dist/smotrishka_${VERSION}.release.apk"
-            "dist/smotrishka_${VERSION}.debug.apk"
-          )
+          release_apk="dist/smotrishka_${VERSION}.release.apk"
+          debug_apk="dist/smotrishka_${VERSION}.debug.apk"
+          assets=("$release_apk" "$debug_apk")
+
+          # Проверяем ассеты до публикации: иначе релиз создаётся с частичным набором
+          # (в rc.2/rc.3 release-APK в релиз не попал именно так).
+          for asset in "${assets[@]}"; do
+            if [ ! -s "$asset" ]; then
+              echo "Нет ассета $asset — публикация отменена" >&2
+              exit 1
+            fi
+            echo "Ассет $asset: $(stat -c%s "$asset") байт"
+          done
+
           # Релиз для тега мог быть создан до прогона (руками или в прошлом ретрае):
-          # gh release create в этом случае падает, и оба APK не публикуются.
-          # Поэтому существующий релиз не пересоздаём, а перезаписываем ассеты.
+          # тогда перезаписываем ассеты, а не пересоздаём релиз.
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Релиз $TAG уже существует — перезаписываю ассеты"
-            gh release upload "$TAG" "${assets[@]}" --clobber
             if [ "$PRERELEASE" = "true" ]; then
               gh release edit "$TAG" --prerelease
             else
@@ -169,5 +177,35 @@ jobs:
             if [ "$PRERELEASE" = "true" ]; then
               args+=(--prerelease)
             fi
-            gh release create "$TAG" "${assets[@]}" "${args[@]}"
+            # Релиз создаём без файлов: загрузка идёт по одному ассету с повтором,
+            # чтобы сбой на одном файле не оставлял релиз с половиной сборок.
+            gh release create "$TAG" "${args[@]}"
           fi
+
+          # Загрузка по одному файлу с тремя попытками.
+          for asset in "${assets[@]}"; do
+            for attempt in 1 2 3; do
+              if gh release upload "$TAG" "$asset" --clobber; then
+                echo "Загружено: $asset"
+                break
+              fi
+              echo "Попытка $attempt не удалась для $asset" >&2
+              if [ "$attempt" = "3" ]; then
+                echo "Не удалось загрузить $asset" >&2
+                exit 1
+              fi
+              sleep 10
+            done
+          done
+
+          # Проверяем, что в релизе лежат оба файла.
+          published="$(gh release view "$TAG" --json assets -q '.assets[].name')"
+          echo "Ассеты релиза:"; echo "$published"
+          for asset in "${assets[@]}"; do
+            name="$(basename "$asset")"
+            if ! grep -qx "$name" <<< "$published"; then
+              echo "В релизе нет ассета $name" >&2
+              exit 1
+            fi
+          done
+          echo "Оба APK опубликованы"
