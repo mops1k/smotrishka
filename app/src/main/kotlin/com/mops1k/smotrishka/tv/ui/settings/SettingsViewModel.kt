@@ -139,6 +139,22 @@ class SettingsViewModel @Inject constructor(
         initialValue = null,
     )
 
+    /** Размер шрифта интерфейса: `1.0` — обычный. */
+    val fontScale: StateFlow<Float> = playerSettingsStore.fontScale.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+        initialValue = PlayerSettingsStore.DEFAULT_FONT_SCALE,
+    )
+
+    /**
+     * Задаёт размер шрифта интерфейса.
+     *
+     * @param scale масштаб шрифта (0.5–2.0); применяется сразу, без перезапуска.
+     */
+    fun setFontScale(scale: Float) {
+        viewModelScope.launch { playerSettingsStore.setFontScale(scale) }
+    }
+
     /** Определять язык канала по названию (`... HD ES`, `... US`). */
     val languageFromName: StateFlow<Boolean> = playerSettingsStore.languageFromName.stateIn(
         scope = viewModelScope,

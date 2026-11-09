@@ -970,9 +970,16 @@ class HomeViewModel @Inject constructor(
         }
 
         mark("карточки каналов")
-        // Категории не передаём готовым списком: их строит buildContent из уже
-        // отфильтрованных каналов, иначе языковые категории остаются при фильтре «Основные».
-        return buildContent(playlist, withProgramme, now)
+        // Категории собираются из плейлиста, а пустые отбрасываются в buildContent:
+        // при языковом фильтре категории без каналов не показываются.
+        val categories = buildList {
+            add(CategoryUi(id = null, name = "Все каналы"))
+            playlist.categories.forEach {
+                add(CategoryUi(id = it.id, name = it.name.replaceFirstChar(Char::uppercaseChar)))
+            }
+        }
+
+        return buildContent(playlist, withProgramme, now, categories)
     }
 
     /**
@@ -1000,15 +1007,15 @@ class HomeViewModel @Inject constructor(
             // Языковой фильтр: остаются каналы выбранного языка и каналы без метки
             // (решение Александра 09.11.2026 — каналы без метки не теряются).
             .filter { matchesLanguage(it) }
-        // Категории строятся из уже отфильтрованных каналов: опустевшие не показываем
-        // (замечание Александра 09.11.2026 — не выводить лишние языковые категории).
-        val categories = preparedCategories ?: buildList {
+        // Категории без каналов не показываем: при выбранном языке целые категории
+        // отфильтровываются (замечание Александра 09.11.2026).
+        val categories = (preparedCategories ?: buildList {
             add(CategoryUi(id = null, name = "Все каналы"))
-            playlist.categories
-                .filter { category -> allChannels.any { it.channel.categoryId == category.id } }
-                .forEach {
-                    add(CategoryUi(id = it.id, name = it.name.replaceFirstChar(Char::uppercaseChar)))
-                }
+            playlist.categories.forEach {
+                add(CategoryUi(id = it.id, name = it.name.replaceFirstChar(Char::uppercaseChar)))
+            }
+        }).filter { category ->
+            category.id == null || allChannels.any { it.channel.categoryId == category.id }
         }
         // Видео в карточке привязано к каналу, подтверждённому OK; при первом построении
         // подтверждаем текущий выбранный, чтобы превью не оставалось пустым.

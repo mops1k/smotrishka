@@ -44,6 +44,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var sourceRepository: SourceRepository
 
+    @Inject
+    lateinit var playerSettings: com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
+
     /**
      * Канал из диплинка ленты «Сейчас идёт».
      *
@@ -78,9 +81,21 @@ class MainActivity : ComponentActivity() {
                 // Слабые приставки: анимации выключаем, интерфейс реагирует сразу.
                 val device = rememberDeviceProfile()
                 val reduceMotion = device.isLowRam
+                // Размер шрифта интерфейса: масштаб задаётся в настройках и действует на все
+                // тексты приложения (решение Александра 09.11.2026).
+                val fontScale by playerSettings.fontScale.collectAsState(
+                    initial = com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore.DEFAULT_FONT_SCALE,
+                )
+                val baseDensity = androidx.compose.ui.platform.LocalDensity.current
                 CompositionLocalProvider(
                     LocalToastController provides toastController,
                     LocalReduceMotion provides reduceMotion,
+                    // Размер шрифта раздаётся экранам: они применяют его к своим текстам.
+                    com.mops1k.smotrishka.tv.ui.common.LocalFontScale provides fontScale,
+                    androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(
+                        baseDensity.density,
+                        baseDensity.fontScale,
+                    ),
                 ) {
                     val startDestination by produceState<String?>(initialValue = null) {
                         value = if (sourceRepository.active() != null) Route.HOME else Route.ONBOARDING

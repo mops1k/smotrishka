@@ -31,6 +31,7 @@ import com.mops1k.smotrishka.tv.ui.about.AboutScreen
 import com.mops1k.smotrishka.tv.ui.about.UpdatePromptDialog
 import com.mops1k.smotrishka.tv.ui.about.UpdateViewModel
 import com.mops1k.smotrishka.tv.ui.common.LocalToastController
+import com.mops1k.smotrishka.tv.ui.common.WithAppFontScale
 import com.mops1k.smotrishka.tv.ui.home.HomeScreen
 import com.mops1k.smotrishka.tv.ui.onboarding.OnboardingScreen
 import com.mops1k.smotrishka.tv.ui.player.PlayerScreen
@@ -130,6 +131,9 @@ fun AppNavHost(
 
     CompositionLocalProvider(LocalUpdateBadge provides updateBadge) {
         Box(modifier = Modifier.fillMaxSize()) {
+            // Размер шрифта из настроек применяется ко всем экранам сразу; плеер внутри себя
+            // оставляет меню обычного размера (решение Александра 09.11.2026).
+            WithAppFontScale {
             NavHost(navController = navController, startDestination = startDestination) {
                 composable(Route.ONBOARDING) {
                     // «Отмена» и Esc есть только при входе из настроек: на первом запуске
@@ -276,6 +280,7 @@ fun AppNavHost(
                     navController.navigate(Route.player(channelId)) { launchSingleTop = true }
                 }
                 onPendingChannelConsumed()
+            }
             }
         }
     }

@@ -126,6 +126,7 @@ import com.mops1k.smotrishka.tv.SessionLog
 import com.mops1k.smotrishka.tv.core.data.AspectMode
 import com.mops1k.smotrishka.tv.core.data.AudioLanguage
 import com.mops1k.smotrishka.tv.core.data.VideoQuality
+import com.mops1k.smotrishka.tv.ui.common.WithoutFontScale
 import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.ui.home.ProgrammeProgress
 import com.mops1k.smotrishka.tv.ui.home.ProgrammeRowUi
@@ -1495,6 +1496,9 @@ private fun PlayerContent(
                     .background(Color.Black.copy(alpha = 0.35f))
                     .onFocusChanged { osdFocused = it.hasFocus },
             ) {
+                // Меню плеера не масштабируется вместе с интерфейсом (решение 09.11.2026);
+                // списки каналов и программы вне этой обёртки — они масштабируются.
+                WithoutFontScale {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -1668,6 +1672,7 @@ private fun PlayerContent(
                             textAlign = TextAlign.Center,
                         )
                     }
+                }
                 }
             }
         }

@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
@@ -186,6 +187,27 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
      */
     suspend fun setLanguageFromName(enabled: Boolean) {
         dataStore.edit { preferences -> preferences[LANGUAGE_FROM_NAME_KEY] = enabled }
+    }
+
+    /**
+     * Размер шрифта интерфейса: `1.0` — обычный, больше — крупнее.
+     *
+     * Масштаб применяется ко всем текстам приложения, кроме элементов управления плеера
+     * (решение Александра 09.11.2026).
+     */
+    val fontScale: Flow<Float> = dataStore.data.map { preferences ->
+        (preferences[FONT_SCALE_KEY] ?: DEFAULT_FONT_SCALE).coerceIn(MIN_FONT_SCALE, MAX_FONT_SCALE)
+    }
+
+    /**
+     * Задаёт размер шрифта интерфейса.
+     *
+     * @param scale масштаб шрифта; значения вне [MIN_FONT_SCALE]–[MAX_FONT_SCALE] обрезаются.
+     */
+    suspend fun setFontScale(scale: Float) {
+        dataStore.edit { preferences ->
+            preferences[FONT_SCALE_KEY] = scale.coerceIn(MIN_FONT_SCALE, MAX_FONT_SCALE)
+        }
     }
 
     /**
@@ -465,6 +487,18 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
         /** Выбор «Основные» в фильтре языка: показывать только каналы без метки языка. */
         const val UNLABELLED_LANGUAGE = "unlabelled"
 
+        /** Минимальный размер шрифта интерфейса. */
+        const val MIN_FONT_SCALE = 0.5f
+
+        /** Максимальный размер шрифта интерфейса. */
+        const val MAX_FONT_SCALE = 2.0f
+
+        /** Обычный размер шрифта интерфейса. */
+        const val DEFAULT_FONT_SCALE = 1.0f
+
+        /** Варианты размера шрифта в настройках: мелкий, средний, обычный, крупный, очень крупный. */
+        val FONT_SCALE_CHOICES = listOf(0.5f, 0.75f, 1.0f, 1.5f, 2.0f)
+
         /** Варианты, которые предлагаются в настройках. */
         val BUFFER_CHOICES = listOf(2, 5, 10, 20)
 
@@ -528,6 +562,8 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
         private val SHOW_UNLABELLED_KEY = booleanPreferencesKey("show_unlabelled_channels")
 
         private val LANGUAGE_FROM_NAME_KEY = booleanPreferencesKey("language_from_name")
+
+        private val FONT_SCALE_KEY = floatPreferencesKey("font_scale")
         private val WATCH_NEXT_ENABLED_KEY = booleanPreferencesKey("watch_next_enabled")
         private val WATCH_NEXT_LIMIT_KEY = intPreferencesKey("watch_next_limit")
         private val AUDIO_LANGUAGE_KEY = stringPreferencesKey("player_audio_language")

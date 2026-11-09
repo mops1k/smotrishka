@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -112,6 +113,8 @@ fun SettingsScreen(
     val channelLanguage by viewModel.channelLanguage.collectAsStateWithLifecycle()
     val languageFromName by viewModel.languageFromName.collectAsStateWithLifecycle()
     val languages by viewModel.languages.collectAsStateWithLifecycle()
+    // Размер шрифта интерфейса: общий масштаб для всех текстов приложения.
+    val fontScale by viewModel.fontScale.collectAsStateWithLifecycle()
     val dataSaver by viewModel.dataSaver.collectAsStateWithLifecycle()
     val audioLanguage by viewModel.audioLanguage.collectAsStateWithLifecycle()
     val archiveDepthHours by viewModel.archiveDepthHours.collectAsStateWithLifecycle()
@@ -235,6 +238,12 @@ fun SettingsScreen(
                         onSelect = viewModel::setChannelLanguage,
                         onLanguageFromName = viewModel::setLanguageFromName,
                         // Карточка во всю ширину: в Column weight(1f) дал бы нулевую высоту.
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(17.dp))
+                    InterfaceCard(
+                        fontScale = fontScale,
+                        onFontScale = viewModel::setFontScale,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(17.dp))
@@ -494,6 +503,61 @@ private fun HomeScreenCard(
 /**
  * Карточка «Программа передач»: окно, глубина архива и гиды XMLTV.
  */
+/**
+ * Подпись размера шрифта.
+ *
+ * @param scale масштаб шрифта из настроек.
+ */
+private fun fontScaleLabel(scale: Float): String = when {
+    scale <= 0.5f -> "Мелкий"
+    scale <= 0.75f -> "Средний"
+    scale <= 1.0f -> "Обычный"
+    scale <= 1.5f -> "Крупный"
+    else -> "Очень крупный"
+}
+
+/**
+ * Карточка «Интерфейс»: размер шрифта всего приложения.
+ *
+ * @param fontScale текущий масштаб шрифта;
+ * @param onFontScale выбор масштаба;
+ * @param modifier размеры карточки.
+ */
+@Composable
+private fun InterfaceCard(
+    fontScale: Float,
+    onFontScale: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    SettingsCard(
+        icon = Icons.Filled.Settings,
+        iconTint = Color(0xFF6FB3F0),
+        iconBackground = Color(0x216FB3F0),
+        title = "Интерфейс",
+        subtitle = "Размер шрифта",
+        modifier = modifier,
+    ) {
+        SettingsRow(
+            title = "Размер шрифта",
+            value = fontScaleLabel(fontScale),
+            hint = "Меняет все тексты приложения; меню плеера не масштабируется",
+        )
+        val choices = PlayerSettingsStore.FONT_SCALE_CHOICES
+        val selectedRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+        // После смены размера шрифта возвращаем фокус на выбранный вариант: экран остаётся
+        // на строке «Размер шрифта», а не прокручивается в начало (замечание 09.11.2026).
+        LaunchedEffect(fontScale) {
+            runCatching { selectedRequester.requestFocus() }
+        }
+        ChoiceGroup(
+            options = choices.map { fontScaleLabel(it) to (it == fontScale) },
+            columns = 3,
+            selectedRequester = selectedRequester,
+            onPick = { index -> choices.getOrNull(index)?.let(onFontScale) },
+        )
+    }
+}
+
 /**
  * Подпись выбора языка в настройках.
  *
@@ -885,7 +949,12 @@ private fun ActionText(text: String, onClick: () -> Unit) {
  * @param onPick индекс выбранного варианта.
  */
 @Composable
-private fun ChoiceGroup(options: List<Pair<String, Boolean>>, columns: Int, onPick: (Int) -> Unit) {
+private fun ChoiceGroup(
+    options: List<Pair<String, Boolean>>,
+    columns: Int,
+    onPick: (Int) -> Unit,
+    selectedRequester: androidx.compose.ui.focus.FocusRequester? = null,
+) {
     val rows = options.chunked(columns.coerceAtLeast(1))
     Column(
         modifier = Modifier
@@ -901,6 +970,9 @@ private fun ChoiceGroup(options: List<Pair<String, Boolean>>, columns: Int, onPi
                         label = label,
                         selected = selected,
                         modifier = Modifier.weight(1f),
+                        // Выбранный вариант получает requester: после смены настройки
+                        // экран остаётся на этой же строке, а не уезжает вверх.
+                        focusRequester = if (selected) selectedRequester else null,
                         onClick = { onPick(index) },
                     )
                 }
@@ -926,12 +998,16 @@ private fun ChoiceButton(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    focusRequester: androidx.compose.ui.focus.FocusRequester? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(TvRadius.choice)
     Box(
         modifier = modifier
             .heightIn(min = TvDimens.choiceMinHeight)
+            .then(
+                if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier,
+            )
             .clip(shape)
             // Фокус в настройках: акцентная заливка и толстая обводка — на тёмных панелях
             // прежняя подсветка 16% не читалась (замечание Александра 06.11.2026).
