@@ -25,6 +25,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
+import com.mops1k.smotrishka.tv.ui.common.ChannelOrder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -737,7 +738,12 @@ class HomeViewModel @Inject constructor(
         } else {
             base.filter { it.channel.name.contains(query.trim(), ignoreCase = true) }
         }
-        return if (section == HomeSection.RECENT) searched else searched.sortedBy { it.channel.name.lowercase() }
+        return if (section == HomeSection.RECENT) {
+            searched
+        } else {
+            // Порядок каналов — один на всё приложение (ChannelOrder).
+            ChannelOrder.sorted(searched) { it.channel.name }
+        }
     }
 
     /** Телепрограмма канала для разворота. */

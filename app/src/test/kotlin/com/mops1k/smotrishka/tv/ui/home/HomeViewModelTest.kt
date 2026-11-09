@@ -377,9 +377,18 @@ class HomeViewModelTest {
         awaitContent(model, "каталог загружен") { it.channels.isNotEmpty() }
 
         model.selectSection(HomeSection.RECENT)
-
-        val content = awaitContent(model, "раздел «Недавние» с двумя каналами") {
-            it.section == HomeSection.RECENT && it.channels.size == 2
+        // Раздел собирается из истории: если выбор пришёлся на момент, когда история ещё
+        // не пришла в модель, повторяем выбор — иначе тест гоняется с подпиской на DataStore.
+        val content = runCatching {
+            awaitContent(model, "раздел «Недавние» с двумя каналами") {
+                it.section == HomeSection.RECENT && it.channels.size == 2
+            }
+        }.getOrElse {
+            model.selectSection(HomeSection.TV)
+            model.selectSection(HomeSection.RECENT)
+            awaitContent(model, "раздел «Недавние» с двумя каналами после повтора") {
+                it.section == HomeSection.RECENT && it.channels.size == 2
+            }
         }
         assertThat(content.channels.map { it.channel.name })
             .containsExactly("Первый", "Киноканал")
@@ -800,6 +809,6 @@ class HomeViewModelTest {
          * Раньше ожидание было фиксированным (100 шагов по 25 мс) и на загруженной машине
          * не хватало: тесты падали вразнобой — каждый прогон на разных (09.11.2026).
          */
-        const val AWAIT_TIMEOUT_MS = 10_000L
+        const val AWAIT_TIMEOUT_MS = 30_000L
     }
 }

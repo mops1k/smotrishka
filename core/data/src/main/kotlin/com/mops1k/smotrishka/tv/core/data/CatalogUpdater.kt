@@ -7,6 +7,8 @@ import com.mops1k.smotrishka.tv.core.playlist.M3uParseResult
 import com.mops1k.smotrishka.tv.core.playlist.XmltvParseResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.Clock
 import java.time.Instant
@@ -47,6 +49,14 @@ class CatalogUpdater(
 ) {
 
     /**
+     * Один проход синхронизации за раз.
+     *
+     * Фоновых запусков два (периодическая задача и разовый запуск при старте), и без этого
+     * мьютекса они качали один и тот же гид дважды подряд (лог 10.11.2026).
+     */
+    private val syncMutex = Mutex()
+
+    /**
      * Обновляет каталог и программу передач.
      *
      * Работа идёт на [Dispatchers.IO]: сюда входят сетевые загрузки и разбор больших файлов,
@@ -55,7 +65,7 @@ class CatalogUpdater(
      * @param source настроенный источник.
      */
     suspend fun update(source: PlaylistSource): UpdateResult = withContext(Dispatchers.IO) {
-        updateInternal(source)
+        syncMutex.withLock { updateInternal(source) }
     }
 
     /**
@@ -187,6 +197,11 @@ class CatalogUpdater(
      */
     suspend fun updateEpgOnly(epgUrl: String?, force: Boolean = false): UpdateResult =
         withContext(Dispatchers.IO) {
+            syncMutex.withLock { updateEpgOnlyLocked(epgUrl, force) }
+        }
+
+    /** Тело [updateEpgOnly] под мьютексом синхронизации. */
+    private suspend fun updateEpgOnlyLocked(epgUrl: String?, force: Boolean): UpdateResult {
         val now = clock.instant()
         val epgWindow = settings.epgWindowHours.first().toLong()
         val archiveDepth = settings.archiveDepthHours.first().toLong()
@@ -255,7 +270,7 @@ class CatalogUpdater(
         )
 
         val failureReason = reason
-        if (failureReason == null) {
+        return if (failureReason == null) {
             UpdateResult.Success(channels = 0, categories = 0, programmes = programmes)
         } else {
             UpdateResult.Partial(

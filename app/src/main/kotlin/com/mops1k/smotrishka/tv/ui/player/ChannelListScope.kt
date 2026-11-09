@@ -1,5 +1,7 @@
 package com.mops1k.smotrishka.tv.ui.player
 
+import com.mops1k.smotrishka.tv.ui.common.ChannelOrder
+
 import com.mops1k.smotrishka.tv.core.model.Channel
 import java.time.Instant
 
@@ -61,17 +63,17 @@ object ChannelListScope {
             else -> channels.filter { it.categoryId == category }
         }
 
-        return scoped
-            .sortedBy { it.name.lowercase() }
-            .map {
-                ChannelRef(
-                    id = it.id.value,
-                    name = it.name,
-                    // Архив показываем так, как заявил плейлист: фоновая проверка выдачи давала
-                    // ложные «нет архива» у каналов, где он есть (решение Александра 09.11.2026).
-                    hasArchive = it.archive != null,
-                )
-            }
+        val rows = scoped.map {
+            ChannelRef(
+                id = it.id.value,
+                name = it.name,
+                // Архив показываем так, как заявил плейлист: фоновая проверка выдачи давала
+                // ложные «нет архива» у каналов, где он есть (решение Александра 09.11.2026).
+                hasArchive = it.archive != null,
+            )
+        }
+        // Порядок тот же, что у списка каналов на главном экране: один поставщик на приложение.
+        return ChannelOrder.sorted(rows) { it.name }
     }
 }
 
