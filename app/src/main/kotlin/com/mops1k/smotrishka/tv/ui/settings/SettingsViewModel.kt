@@ -248,10 +248,8 @@ class SettingsViewModel @Inject constructor(
     }
 
     init {
-        viewModelScope.launch {
-            // Парсер общий для импортов: настройка языка по названию применяется сразу.
-            parser.languageFromName = playerSettingsStore.languageFromName.first()
-        }
+        // Начальное значение «определять язык по названию» ставит SmotrishkaApplication:
+        // в init ViewModel читать настройку нельзя — это ломает тесты своими корутинами.
         // Языки для фильтра собираем из плейлиста: список нужен только в настройках.
         viewModelScope.launch {
             val values = runCatching {

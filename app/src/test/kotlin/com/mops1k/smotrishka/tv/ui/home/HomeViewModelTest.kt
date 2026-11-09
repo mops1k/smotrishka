@@ -607,10 +607,12 @@ class HomeViewModelTest {
     private suspend fun TestScope.awaitPublished(
         predicate: (List<com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextCard>) -> Boolean = { it.isNotEmpty() },
     ): List<com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextCard> {
-        repeat(AWAIT_STEPS) {
+        val deadline = System.currentTimeMillis() + AWAIT_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
             advanceUntilIdle()
             watchNextSync.last?.takeIf(predicate)?.let { return it }
             yield()
+            // DataStore пишет на реальном IO: даём ему время между прокрутками времени.
             withContext(Dispatchers.Default) { delay(AWAIT_REAL_MS) }
         }
         throw AssertionError("лента не опубликована: ${watchNextSync.published}")
@@ -618,7 +620,8 @@ class HomeViewModelTest {
 
     /** Дожидается, что лента убрана из лаунчера. */
     private suspend fun TestScope.awaitCleared() {
-        repeat(AWAIT_STEPS) {
+        val deadline = System.currentTimeMillis() + AWAIT_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
             advanceUntilIdle()
             if (watchNextSync.cleared > 0) return
             yield()
@@ -645,10 +648,15 @@ class HomeViewModelTest {
     }
 
     private companion object {
-        /** Сколько шагов виртуального времени даём отложенной публикации ленты. */
-        const val AWAIT_STEPS = 100
-
         /** Сколько реального времени ждём ввода-вывода между шагами. */
         const val AWAIT_REAL_MS = 25L
+
+        /**
+         * Предел ожидания по реальному времени.
+         *
+         * Раньше ожидание было фиксированным (100 шагов по 25 мс) и на загруженной машине
+         * не хватало: тесты падали вразнобой — каждый прогон на разных (09.11.2026).
+         */
+        const val AWAIT_TIMEOUT_MS = 10_000L
     }
 }

@@ -15,9 +15,22 @@ interface EpgDao {
     @Query("SELECT * FROM epg_channels")
     suspend fun channels(): List<EpgChannelEntity>
 
-    /** Передачи канала, попадающие в интервал. */
+    /**
+     * Передачи канала, попадающие в интервал, без дублей из разных гидов.
+     *
+     * Один канал каталога может получать сетку из нескольких гидов, и одна и та же передача
+     * приходит несколько раз с расхождением в минуту. Дубль — строка с тем же названием,
+     * которая пересекается с более ранней строкой того же канала; в выборку попадает только
+     * самая ранняя из них (решение Александра 09.11.2026 — дедупликация в SQL).
+     */
     @Query(
-        "SELECT * FROM programmes WHERE channelId = :channelId AND endAt > :fromAt AND startAt < :toAt ORDER BY startAt",
+        "SELECT * FROM programmes p " +
+            "WHERE p.channelId = :channelId AND p.endAt > :fromAt AND p.startAt < :toAt " +
+            "AND NOT EXISTS (" +
+            "SELECT 1 FROM programmes q " +
+            "WHERE q.channelId = p.channelId AND q.title = p.title " +
+            "AND q.startAt < p.startAt AND q.endAt > p.startAt) " +
+            "ORDER BY p.startAt",
     )
     suspend fun programmes(channelId: String, fromAt: Long, toAt: Long): List<ProgrammeEntity>
 

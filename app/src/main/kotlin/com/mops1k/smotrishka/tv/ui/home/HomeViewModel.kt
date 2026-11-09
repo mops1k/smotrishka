@@ -879,10 +879,10 @@ class HomeViewModel @Inject constructor(
 
         // Связи каналов с гидом уже сохранены в базе: не читаем 3147 каналов гида
         // и не сопоставляем названия на каждом открытии экрана.
-        val links = withTimeoutOrNull(EPG_READ_TIMEOUT_MS) { channelEpgStore.links() }.orEmpty()
+        val stored = withTimeoutOrNull(EPG_READ_TIMEOUT_MS) { channelEpgStore.links() }.orEmpty()
         // Запоминаем связи: по ним же собирается развёрнутая телепрограмма канала.
-        epgLinks = links
-        if (links.isEmpty()) {
+        epgLinks = stored
+        if (stored.isEmpty()) {
             mark("связи с гидом пусты — показываем каналы, гид догрузится")
             // Первый запуск после обновления: собираем связи в фоне и перестраиваем экран.
             viewModelScope.launch {
@@ -896,7 +896,19 @@ class HomeViewModel @Inject constructor(
                 epgPending = true,
             )
         }
-        mark("связи с гидом ${links.size}")
+        mark("связи с гидом ${stored.size}")
+        // Тот же резервный путь, что у плеера: канал без сохранённой связи сопоставляем
+        // по названию. Иначе список показывал «Программы нет» там, где программа есть
+        // и видна в оверлее телепрограммы (замечание Александра 09.11.2026).
+        val links = stored + runCatching {
+            val unmatched = playlist.channels.filter { stored[it.id] == null }
+            if (unmatched.isEmpty()) {
+                emptyMap()
+            } else {
+                // Тот же сопоставитель, что использует плеер, — один путь для всех экранов.
+                EpgMatcher().match(unmatched, epgStore.epgChannels()).matches
+            }
+        }.getOrDefault(emptyMap())
         // У каталога провайдера часто нет адресов логотипов, а в гиде они есть.
         // Подставляем иконку гида тем каналам, у которых своего логотипа нет.
         val channelsNeedingIcon = playlist.channels.filter { it.logoUrl.isNullOrBlank() }

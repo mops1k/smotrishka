@@ -198,7 +198,8 @@ fun PlayerScreen(
     val recoveryDelaySeconds by viewModel.recoveryDelaySeconds.collectAsStateWithLifecycle()
     val audioLanguage by viewModel.audioLanguage.collectAsStateWithLifecycle()
 
-    BackHandler(onBack = onBack)
+    // «Назад» обрабатывается одним обработчиком внутри содержимого плеера: он знает,
+    // открыт ли оверлей, и сначала закрывает его (замечание Александра 09.11.2026).
     ImmersiveMode()
 
     Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
@@ -311,6 +312,29 @@ private fun PlayerContent(
     val backPressScope = scope
     val controls = rememberPlayerControls(hideSeconds = osdHideSeconds)
     val controlsState by controls.state.collectAsStateWithLifecycle()
+
+    // «Назад» закрывает открытый оверлей и только при полностью закрытых оверлеях выходит
+    // из плеера. Долгое удержание «назад» открывает «Недавние» — это отдельная ветка
+    // обработчика клавиш (замечание Александра 09.11.2026).
+    BackHandler(enabled = true) {
+        android.util.Log.d(
+            "SmotrishkaBack",
+            "назад: каналы=$channelsVisible недавние=$recentsVisible " +
+                "программа=$programmeVisible осд=${controlsState.osdVisible}",
+        )
+        when {
+            channelsVisible -> channelsVisible = false
+            recentsVisible -> recentsVisible = false
+            programmeVisible -> programmeVisible = false
+            controlsState.osdVisible -> controls.hideOsd()
+            else -> onBack()
+        }
+    }
+
+    // Одновременно открыт только один оверлей: список каналов, недавние, программа или меню.
+    LaunchedEffect(channelsVisible, recentsVisible, programmeVisible) {
+        if (channelsVisible || recentsVisible || programmeVisible) controls.hideOsd()
+    }
     // Фокус в OSD при открытии: иначе он остаётся на плеере и кнопки не работают.
     val osdFirstFocus = remember { FocusRequester() }
     LaunchedEffect(controlsState.osdVisible) {
@@ -910,31 +934,12 @@ private fun PlayerContent(
                         KeyEventType.KeyUp -> {
                             backPressJob?.cancel()
                             backPressJob = null
-                            when {
-                                // Удержание уже открыло панель — просто оставляем её.
-                                backHeld -> {
-                                    backHeld = false
-                                    true
-                                }
-                                // Оверлей списка открыт: «назад» закрывает только его.
-                                channelsVisible -> {
-                                    channelsVisible = false
-                                    true
-                                }
-                                // Панель открыта: «назад» скрывает её, из плеера не выходим.
-                                recentsVisible -> {
-                                    recentsVisible = false
-                                    true
-                                }
-                                programmeVisible -> {
-                                    programmeVisible = false
-                                    true
-                                }
-                                else -> {
-                                    onBack()
-                                    true
-                                }
-                            }
+                            // Короткое нажатие обрабатывает BackHandler: он один знает,
+                            // закрывать оверлей или выходить. Здесь только гасим удержание,
+                            // иначе одно нажатие закрывало оверлей и сразу выходило из плеера
+                            // (замечание Александра 09.11.2026).
+                            backHeld = false
+                            true
                         }
                         else -> false
                     }
@@ -991,27 +996,35 @@ private fun PlayerContent(
                             programmeVisible = true
                         }
                         true
-                    }                } else if (event.key == Key.DirectionUp || event.key == Key.DirectionDown) {
+                    }                } else if (
+                    // Кнопки «канал вверх/вниз» пульта: переключают канал даже при открытом
+                    // оверлее (в отличие от стрелок) — требование Александра 09.11.2026.
+                    // На этом пульте они приходят медиа-кодами MEDIA_NEXT/PREVIOUS (87/88).
+                    event.nativeKeyEvent?.keyCode == android.view.KeyEvent.KEYCODE_CHANNEL_UP ||
+                    event.nativeKeyEvent?.keyCode == android.view.KeyEvent.KEYCODE_CHANNEL_DOWN ||
+                    event.nativeKeyEvent?.keyCode == android.view.KeyEvent.KEYCODE_MEDIA_NEXT ||
+                    event.nativeKeyEvent?.keyCode == android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS ||
+                    event.key == Key.ChannelUp || event.key == Key.ChannelDown ||
+                    event.key == Key.MediaNext || event.key == Key.MediaPrevious
+                ) {
+                    val native = event.nativeKeyEvent?.keyCode
+                    val previous =
+                        native == android.view.KeyEvent.KEYCODE_CHANNEL_UP ||
+                            native == android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS ||
+                            event.key == Key.ChannelUp || event.key == Key.MediaPrevious
+                    if (event.type == KeyEventType.KeyDown) {
+                        val target = if (previous) neighbours.first else neighbours.second
+                        target?.let(onSwitchChannel)
+                    }
+                    true
+                } else if (event.key == Key.DirectionUp || event.key == Key.DirectionDown) {
                     if (channelsVisible || recentsVisible || programmeVisible || controlsState.osdVisible) {
-                        // Список каналов, недавние или OSD: крестовина принадлежит им.
+                        // Список каналов, недавние или OSD: стрелки принадлежат им.
                         false
                     } else {
                         if (event.type == KeyEventType.KeyDown) {
                             val target =
                                 if (event.key == Key.DirectionUp) neighbours.first else neighbours.second
-                            target?.let(onSwitchChannel)
-                        }
-                        true
-                    }
-                } else if (event.key == Key.ChannelUp || event.key == Key.ChannelDown) {
-                    // Аппаратные кнопки «канал вверх/вниз» на пульте: переключают канал всегда,
-                    // открыт OSD или закрыт (замечание Александра 09.11.2026).
-                    if (channelsVisible || recentsVisible || programmeVisible) {
-                        false
-                    } else {
-                        if (event.type == KeyEventType.KeyDown) {
-                            val target =
-                                if (event.key == Key.ChannelUp) neighbours.first else neighbours.second
                             target?.let(onSwitchChannel)
                         }
                         true

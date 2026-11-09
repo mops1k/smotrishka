@@ -38,6 +38,9 @@ class SmotrishkaApplication : Application(), Configuration.Provider {
     lateinit var playerSettings: PlayerSettingsStore
 
     @Inject
+    lateinit var m3uParser: com.mops1k.smotrishka.tv.core.playlist.M3uParser
+
+    @Inject
     lateinit var epgGuides: EpgGuideRepository
 
     @Inject
@@ -75,6 +78,12 @@ class SmotrishkaApplication : Application(), Configuration.Provider {
         CoroutineScope(Dispatchers.IO).launch {
             runCatching { epgGuides.ensureDefaults() }
                 .onFailure { android.util.Log.e("SmotrishkaSync", "epg guides seed failed", it) }
+        }
+        CoroutineScope(Dispatchers.IO).launch {
+            // Определение языка по названию канала: настройка действует на разбор плейлиста,
+            // поэтому парсер получает её при старте приложения (замечание 09.11.2026).
+            runCatching { m3uParser.languageFromName = playerSettings.languageFromName.first() }
+                .onFailure { android.util.Log.e("SmotrishkaSync", "language from name init failed", it) }
         }
         // Если каталог загружен из файла, автосинхронизация по коду не должна его перезаписывать.
         CoroutineScope(Dispatchers.IO).launch {
