@@ -2,6 +2,7 @@ package com.mops1k.smotrishka.tv.core.data
 
 import com.mops1k.smotrishka.tv.core.model.Channel
 import com.mops1k.smotrishka.tv.core.model.EpgChannel
+import com.mops1k.smotrishka.tv.core.playlist.EpgIndex
 import com.mops1k.smotrishka.tv.core.playlist.EpgMatcher
 import com.mops1k.smotrishka.tv.core.playlist.XmltvStreamParser
 import kotlinx.coroutines.runBlocking
@@ -17,15 +18,17 @@ import java.time.temporal.ChronoUnit
  * провайдера не перетираются.
  *
  * Публичные гиды живут в своём пространстве идентификаторов (`epg.one` — числа,
- * `iptvx.one` — слаги), поэтому каналы гида сопоставляются с каталогом через
- * [EpgMatcher]: сначала по `tvg-id`, затем по имени. Передачи чужих каналов в базу
- * не пишутся — иначе она раздувается до сотен мегабайт.
+ * `iptvx.one` — слаги), поэтому каналы гида сопоставляются с каталогом по тем же правилам,
+ * что и везде ([EpgIndex]): `tvg-id`, точное имя и бренд без языковых суффиксов. Бренд нужен,
+ * чтобы в базе был свежий одноимённый канал другого гида и провайдер мог на него переключиться.
+ * Передачи чужих каналов в базу не пишутся — иначе она раздувается до сотен мегабайт.
  *
  * @param client потоковый HTTP-клиент;
  * @param store хранилище программы передач;
  * @param parser потоковый разбор XMLTV;
  * @param clock источник времени: окно передач считается от него;
- * @param matcher сопоставление каналов каталога с каналами гида.
+ * @param matcher сопоставление каналов каталога с каналами гида;
+ * @param tracker учёт незавершённых импортов; `null` — без учёта.
  */
 class EpgStreamImporter(
     private val client: HttpBytesClient,
@@ -33,6 +36,7 @@ class EpgStreamImporter(
     private val parser: XmltvStreamParser = XmltvStreamParser(),
     private val clock: Clock = Clock.systemUTC(),
     private val matcher: EpgMatcher = EpgMatcher(),
+    private val tracker: EpgImportTracker? = null,
 ) {
 
     /**
@@ -62,6 +66,9 @@ class EpgStreamImporter(
         val guideChannels = ArrayList<EpgChannel>()
         var added = 0
 
+        // Учёт начинается до запроса: если процесс убьют посреди загрузки, запись останется
+        // и следующий запуск перекачает гид заново (требование Александра 10.11.2026).
+        tracker?.start(url, now.toEpochMilli())
         val result = client.withStream(url) { stream ->
             runBlocking {
                 // Ответ получен успешно, поэтому стирать прежнюю программу уже безопасно:
@@ -74,18 +81,32 @@ class EpgStreamImporter(
                     // сопоставление уже готово, дальше просто накапливается.
                     if (channels.isNotEmpty() && filtering) {
                         guideChannels += channels
-                        matched += matcher.match(catalogChannels, guideChannels).matches.values
+                        // Те же правила, что у провайдера: основной канал и брендовые
+                        // варианты. Иначе свежий одноимённый гид в базу не попадал.
+                        val index = EpgIndex(guideChannels, matcher)
+                        catalogChannels.forEach { matched += index.candidates(it) }
                     }
 
                     val inWindow = programmes.filter { it.start.isBefore(to) && it.end.isAfter(from) }
                     val wanted = if (filtering) inWindow.filter { it.channelId in matched } else inWindow
                     val channelsToStore = if (filtering) channels.filter { it.id in matched } else channels
                     added += runBlocking { store.mergeBatch(channelsToStore, wanted) }
+                    // Прогресс пишется по ходу разбора: после обрыва видно, где остановились.
+                    runBlocking {
+                        tracker?.progress(
+                            source = url,
+                            parsedChannels = matched.size,
+                            addedProgrammes = added,
+                            now = clock.instant().toEpochMilli(),
+                        )
+                    }
                 }
             }
         }
         return when (result) {
             is HttpStreamResult.Success -> {
+                // Запись снимается только после полного разбора файла.
+                tracker?.finish(url)
                 android.util.Log.d(
                     "SmotrishkaSync",
                     "epg stream: источник=$url добавлено=$added всего=${result.value}",
@@ -93,13 +114,15 @@ class EpgStreamImporter(
                 EpgStreamResult.Success(added)
             }
 
-            is HttpStreamResult.HttpError -> EpgStreamResult.Failure(
-                "Гид ответил кодом ${result.code}",
-            )
+            is HttpStreamResult.HttpError -> {
+                tracker?.interrupted(url, clock.instant().toEpochMilli())
+                EpgStreamResult.Failure("Гид ответил кодом ${result.code}")
+            }
 
-            is HttpStreamResult.NetworkError -> EpgStreamResult.Failure(
-                "Гид недоступен: ${result.reason}",
-            )
+            is HttpStreamResult.NetworkError -> {
+                tracker?.interrupted(url, clock.instant().toEpochMilli())
+                EpgStreamResult.Failure("Гид недоступен: ${result.reason}")
+            }
         }
     }
 }

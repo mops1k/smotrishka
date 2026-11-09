@@ -156,6 +156,7 @@ class SettingsViewModelTest {
         epgGuideRepository = guideRepository,
         epgGuideValidator = guideValidator,
         watchNextSync = watchNextSync,
+        epgUpdater = com.mops1k.smotrishka.tv.epg.EpgUpdater(catalogUpdater),
     ).also { viewModels += it }
 
     @Test

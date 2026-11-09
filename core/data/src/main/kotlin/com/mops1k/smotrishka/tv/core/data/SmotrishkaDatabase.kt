@@ -28,8 +28,9 @@ import androidx.room.RoomDatabase
         EpgGuideEntity::class,
         SearchIndexEntity::class,
         ChannelEpgEntity::class,
+        EpgImportEntity::class,
     ],
-    version = 6,
+    version = DB_VERSION,
     exportSchema = false,
 )
 abstract class SmotrishkaDatabase : RoomDatabase() {
@@ -43,4 +44,6 @@ abstract class SmotrishkaDatabase : RoomDatabase() {
     abstract fun searchDao(): SearchDao
 
     abstract fun channelEpgDao(): ChannelEpgDao
+
+    abstract fun epgImportDao(): EpgImportDao
 }

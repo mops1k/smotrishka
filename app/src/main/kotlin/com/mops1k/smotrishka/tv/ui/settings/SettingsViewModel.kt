@@ -17,6 +17,8 @@ import com.mops1k.smotrishka.tv.core.data.SourceRepository
 import com.mops1k.smotrishka.tv.core.data.SyncStatusStore
 import com.mops1k.smotrishka.tv.core.data.VideoQuality
 import com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextSync
+import com.mops1k.smotrishka.tv.epg.EpgUpdateState
+import com.mops1k.smotrishka.tv.epg.EpgUpdater
 import com.mops1k.smotrishka.tv.core.model.EpgGuide
 import com.mops1k.smotrishka.tv.core.model.PlaylistSource
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -25,6 +27,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -59,6 +62,7 @@ class SettingsViewModel @Inject constructor(
     private val epgGuideRepository: EpgGuideRepository,
     private val epgGuideValidator: EpgGuideValidator,
     private val watchNextSync: WatchNextSync,
+    private val epgUpdater: EpgUpdater,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<SettingsUiState>(SettingsUiState.Loading)
@@ -282,6 +286,23 @@ class SettingsViewModel @Inject constructor(
     fun refresh() {
         viewModelScope.launch { _state.value = buildState() }
     }
+
+    /**
+     * Полное обновление программы передач: кэш сбрасывается, гиды скачиваются заново
+     * со всех источников, включая пользовательские (просьба Александра 10.11.2026).
+     */
+    fun refreshEpgCompletely() {
+        viewModelScope.launch {
+            val epgUrl = runCatching { catalogStore.playlist().epgUrl }.getOrNull()
+                ?.takeIf { it.isNotBlank() }
+            epgUpdater.update(epgUrl, force = true)
+        }
+    }
+
+    /** Идёт ли сейчас полное обновление программы передач. */
+    val epgRunning: StateFlow<Boolean> = epgUpdater.state
+        .map { it is EpgUpdateState.Running }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), false)
 
     /** Перечитывает пользовательские гиды программы передач. */
     fun refreshGuides() {

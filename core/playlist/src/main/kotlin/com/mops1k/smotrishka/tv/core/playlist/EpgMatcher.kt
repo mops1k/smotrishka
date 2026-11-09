@@ -44,13 +44,33 @@ class EpgMatcher {
         return EpgMatchResult(matches = matches, unmatched = unmatched)
     }
 
-    private fun normalize(raw: String): String =
+    /**
+     * Приводит название к сравнимому виду: без регистра, лишних пробелов, `ё`→`е`.
+     *
+     * @param raw название канала или канала гида.
+     */
+    fun normalize(raw: String): String =
         raw.trim()
             .lowercase(Locale.ROOT)
             .replace(WHITESPACE, " ")
             .replace('ё', 'е')
 
+    /**
+     * Даёт «бренд» названия — без языковых и качественных суффиксов.
+     *
+     * Один и тот же канал в разных гидах зовётся по-разному («4Ever Drama HD UA» и
+     * «4ever Drama HD»), поэтому для запасного поиска суффиксы `UA`, `RU`, `HD` и подобные
+     * отбрасываются. Если от названия ничего не осталось, возвращается обычная нормализация.
+     *
+     * @param raw название канала или канала гида.
+     */
+    fun brandName(raw: String): String {
+        val words = normalize(raw).split(' ').filterNot { it in SUFFIXES }
+        return words.joinToString(" ").ifBlank { normalize(raw) }
+    }
+
     private companion object {
         val WHITESPACE = Regex("""\s+""")
+        val SUFFIXES = setOf("ua", "ru", "kz", "by", "hd", "fhd", "uhd", "sd", "4k", "int")
     }
 }

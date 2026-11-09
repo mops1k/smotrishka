@@ -5,11 +5,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
 import com.mops1k.smotrishka.tv.core.data.ChannelEpgStore
+import com.mops1k.smotrishka.tv.core.data.EpgProvider
 import com.mops1k.smotrishka.tv.core.data.EpgStore
 import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
 import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.core.playlist.EpgMatcher
-import com.mops1k.smotrishka.tv.core.playlist.EpgResolver
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +38,7 @@ class ProgrammeViewModel @Inject constructor(
     private val epgMatcher: EpgMatcher,
     private val settingsStore: PlayerSettingsStore,
     private val clock: Clock,
+    private val epgProvider: EpgProvider,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -70,12 +71,9 @@ class ProgrammeViewModel @Inject constructor(
         // epgId канала → сопоставление по названию. Раньше этот экран искал только
         // по названию и мог взять передачу другой станции.
         val links = runCatching { channelEpgStore.links() }.getOrDefault(emptyMap())
-        val epgId = EpgResolver.resolve(
-            channels = listOf(channel),
-            links = links,
-            epgChannels = epgStore.epgChannels(),
-            matcher = epgMatcher,
-        )[channel.id]
+        // Общий порядок поиска гида с проверкой подмены источника: привязанный гид, у которого
+        // нет свежих передач, уступает одноимённому только при совпадающей сетке.
+        val epgId = runCatching { epgProvider.epgId(channel, clock.instant()) }.getOrNull()
             ?: return@runCatching ProgrammeUiState.Error("Для этого канала нет программы передач")
 
         val now = clock.instant()

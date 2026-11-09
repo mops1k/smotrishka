@@ -69,6 +69,32 @@ interface EpgDao {
     @Query("SELECT COUNT(DISTINCT channelId) FROM programmes WHERE endAt > :fromAt AND startAt < :toAt")
     suspend fun countCoveredChannels(fromAt: Long, toAt: Long): Int
 
+    /** Каналы гида, у которых есть передача в окне: по ним выбирается самый свежий гид. */
+    @Query("SELECT DISTINCT channelId FROM programmes WHERE endAt > :fromAt AND startAt < :toAt")
+    suspend fun coveredChannelIds(fromAt: Long, toAt: Long): List<String>
+
+    /** Времена начала передач канала в окне: по ним сверяются сетки двух гидов. */
+    @Query("SELECT startAt FROM programmes WHERE channelId = :channelId AND startAt >= :fromAt AND startAt <= :toAt")
+    suspend fun startTimes(channelId: String, fromAt: Long, toAt: Long): List<Long>
+
+    /** Названия и начала передач канала в окне: сверка сеток без строк-заглушек. */
+    @Query(
+        "SELECT startAt AS startAt, title AS title FROM programmes " +
+            "WHERE channelId = :channelId AND startAt >= :fromAt AND startAt <= :toAt",
+    )
+    suspend fun startsWithTitles(
+        channelId: String,
+        fromAt: Long,
+        toAt: Long,
+    ): List<ProgrammeStartRow>
+
+    /** Название передачи, идущей в момент: по ней выбирается гид с настоящей программой. */
+    @Query(
+        "SELECT title FROM programmes WHERE channelId = :channelId " +
+            "AND startAt <= :at AND endAt > :at LIMIT 1",
+    )
+    suspend fun currentTitle(channelId: String, at: Long): String?
+
     /** Передачи, пересекающиеся с интервалом: нужно для индекса поиска. */
     @Query("SELECT * FROM programmes WHERE endAt > :fromAt AND startAt < :toAt")
     suspend fun programmesInRange(fromAt: Long, toAt: Long): List<ProgrammeEntity>

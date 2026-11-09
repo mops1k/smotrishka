@@ -8,6 +8,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
 import com.mops1k.smotrishka.tv.core.data.ChannelEpgStore
+import com.mops1k.smotrishka.tv.core.data.EpgProvider
 import com.mops1k.smotrishka.tv.core.data.EpgStore
 import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
 import com.mops1k.smotrishka.tv.core.data.SmotrishkaDatabase
@@ -93,6 +94,14 @@ class ProgrammeViewModelTest {
         epgMatcher = EpgMatcher(),
         settingsStore = PlayerSettingsStore(dataStore),
         clock = Clock.fixed(now, ZoneOffset.UTC),
+        epgProvider = EpgProvider(
+            channelEpgStore = ChannelEpgStore(
+                dao = database.channelEpgDao(),
+                epgStore = epgStore,
+                epgMatcher = EpgMatcher(),
+            ),
+            epgStore = epgStore,
+        ),
         savedStateHandle = SavedStateHandle(mapOf(ProgrammeViewModel.ARG_CHANNEL_ID to channelId)),
     ).also { viewModels += it }
 

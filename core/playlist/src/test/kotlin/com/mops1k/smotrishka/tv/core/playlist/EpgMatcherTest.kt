@@ -91,4 +91,13 @@ class EpgMatcherTest {
 
         assertThat(result.matches[ChannelId("1")]).isEqualTo("a")
     }
+
+    @Test
+    fun `брендовое имя отбрасывает языковые и качественные суффиксы`() {
+        // Один и тот же канал в разных гидах: «4Ever Drama HD UA» и «4ever Drama HD».
+        assertThat(matcher.brandName("4Ever Drama HD UA")).isEqualTo("4ever drama")
+        assertThat(matcher.brandName("Первый канал HD")).isEqualTo("первый канал")
+        // Название целиком из суффиксов не схлопывается в пустую строку.
+        assertThat(matcher.brandName("HD")).isEqualTo("hd")
+    }
 }

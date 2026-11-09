@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.room.Room
+import androidx.room.migration.Migration
 import androidx.work.WorkManager
 import com.mops1k.smotrishka.tv.core.data.AesGcmSecretCipher
 import com.mops1k.smotrishka.tv.core.data.CatalogDao
@@ -12,7 +13,8 @@ import com.mops1k.smotrishka.tv.core.data.ChannelEpgDao
 import com.mops1k.smotrishka.tv.core.data.CatalogMapper
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
 import com.mops1k.smotrishka.tv.core.data.CatalogUpdater
-import com.mops1k.smotrishka.tv.core.data.DatabaseMigrations
+import com.mops1k.smotrishka.tv.core.data.EpgImportDao
+import com.mops1k.smotrishka.tv.core.data.EpgImportTracker
 import com.mops1k.smotrishka.tv.core.data.SearchDao
 import com.mops1k.smotrishka.tv.core.data.SearchRepository
 import com.mops1k.smotrishka.tv.core.data.EpgDao
@@ -79,6 +81,10 @@ object DataModule {
     @Provides
     fun provideChannelEpgDao(database: SmotrishkaDatabase): ChannelEpgDao = database.channelEpgDao()
 
+    /** Учёт незавершённых импортов гида: оборванный импорт повторяется при следующем старте. */
+    @Provides
+    fun provideEpgImportDao(database: SmotrishkaDatabase): EpgImportDao = database.epgImportDao()
+
     @Provides
     @Singleton
     fun okHttpClient(@ApplicationContext context: Context): OkHttpClient =
@@ -102,15 +108,14 @@ object DataModule {
 
     @Provides
     @Singleton
-    fun database(@ApplicationContext context: Context): SmotrishkaDatabase =
+    fun database(
+        @ApplicationContext context: Context,
+        // Набор миграций собирает контейнер: новый класс миграции подхватывается сам,
+        // перечислять их в builder не нужно (решение Александра 10.11.2026).
+        migrations: Set<@JvmSuppressWildcards Migration>,
+    ): SmotrishkaDatabase =
         Room.databaseBuilder(context, SmotrishkaDatabase::class.java, DB_NAME)
-            .addMigrations(
-                DatabaseMigrations.MIGRATION_1_2,
-                DatabaseMigrations.MIGRATION_2_3,
-                DatabaseMigrations.MIGRATION_3_4,
-                DatabaseMigrations.MIGRATION_4_5,
-                DatabaseMigrations.MIGRATION_5_6,
-            )
+            .addMigrations(*migrations.sortedBy { it.startVersion }.toTypedArray())
             .build()
 
     @Provides
@@ -258,6 +263,7 @@ object DataModule {
         httpClient: OkHttpClient,
         epgGuideRepository: EpgGuideRepository,
         epgGuideStateStore: EpgGuideStateStore,
+        epgImportTracker: EpgImportTracker,
         clock: java.time.Clock,
     ): CatalogUpdater = CatalogUpdater(
         catalogStore = catalogStore,
@@ -268,11 +274,13 @@ object DataModule {
         clock = clock,
         guideRepository = epgGuideRepository,
         guideState = epgGuideStateStore,
+        importTracker = epgImportTracker,
         // Гиды огромные, поэтому дописываются потоком, а не целиком в память.
         streamImporter = EpgStreamImporter(
             client = HttpBytesClient(httpClient),
             store = epgStore,
             clock = clock,
+            tracker = epgImportTracker,
         ),
     )
 

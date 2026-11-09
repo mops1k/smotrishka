@@ -77,6 +77,36 @@ class EpgStoreTest {
     }
 
     @Test
+    fun `свежие каналы гида — только те, у кого есть передача в окне`() = runTest {
+        store.replace(
+            Epg(
+                channels = listOf(
+                    EpgChannel(id = "fresh", displayName = "Свежий"),
+                    EpgChannel(id = "stale", displayName = "Старый"),
+                ),
+                programmes = listOf(
+                    Programme(
+                        channelId = "fresh",
+                        title = "Сейчас",
+                        start = now.minusSeconds(600),
+                        end = now.plusSeconds(600),
+                    ),
+                    Programme(
+                        channelId = "stale",
+                        title = "Вчера",
+                        start = now.minusSeconds(90_000),
+                        end = now.minusSeconds(80_000),
+                    ),
+                ),
+            ),
+        )
+
+        val covered = store.coveredChannelIds(now.minusSeconds(7200), now.plusSeconds(7200))
+
+        assertThat(covered).containsExactly("fresh")
+    }
+
+    @Test
     fun `повторная загрузка заменяет программу`() = runTest {
         store.replace(epg(programme("Старая", now.minusSeconds(3600), now)))
         store.replace(epg(programme("Новая", now.minusSeconds(3600), now)))

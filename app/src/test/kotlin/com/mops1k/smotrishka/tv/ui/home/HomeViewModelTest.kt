@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.google.common.truth.Truth.assertThat
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
 import com.mops1k.smotrishka.tv.core.data.ChannelEpgStore
+import com.mops1k.smotrishka.tv.core.data.EpgProvider
 import com.mops1k.smotrishka.tv.core.data.EpgStore
 import com.mops1k.smotrishka.tv.core.data.SearchRepository
 import com.mops1k.smotrishka.tv.core.data.FavoritesStore
@@ -130,6 +131,7 @@ class HomeViewModelTest {
         epgUpdater = epgUpdater(),
         searchRepository = searchRepository,
         watchNextSync = watchNextSync,
+        epgProvider = EpgProvider(channelEpgStore = channelEpgStore(), epgStore = epgStore),
     ).also { viewModels += it }
 
     /** Связи каналов с гидом: на них же опирается лента «Сейчас идёт». */
@@ -300,7 +302,7 @@ class HomeViewModelTest {
     fun `выбор канала показывает его в карточке`() = runTest {
         playlist()
         val model = viewModel()
-        model.state.first { it is HomeUiState.Content }
+        awaitContent(model, "экран загружен") { true }
 
         model.selectChannel(ChannelId("two"))
         advanceUntilIdle()
@@ -369,15 +371,16 @@ class HomeViewModelTest {
         val model = viewModel()
         // Подписка на историю асинхронная: дожидаемся, пока модель прочитает оба канала,
         // иначе раздел «Недавние» соберётся пустым (флейк 09.11.2026).
-        model.state.first { it is HomeUiState.Content && it.recent.size == 2 }
+        awaitContent(model, "история прочитана") { it.recent.size == 2 }
+        // Каталог должен быть в памяти: иначе selectSection уходит в асинхронную ветку
+        // и раздел собирается позже, чем тест начинает его ждать.
+        awaitContent(model, "каталог загружен") { it.channels.isNotEmpty() }
 
         model.selectSection(HomeSection.RECENT)
 
-        val content = model.state.first {
-            it is HomeUiState.Content &&
-                it.section == HomeSection.RECENT &&
-                it.channels.size == 2
-        } as HomeUiState.Content
+        val content = awaitContent(model, "раздел «Недавние» с двумя каналами") {
+            it.section == HomeSection.RECENT && it.channels.size == 2
+        }
         assertThat(content.channels.map { it.channel.name })
             .containsExactly("Первый", "Киноканал")
             .inOrder()
@@ -491,6 +494,47 @@ class HomeViewModelTest {
         assertThat(content.schedule.map { it.status })
             .containsExactly(ProgrammeStatus.PAST, ProgrammeStatus.NOW)
             .inOrder()
+    }
+
+    @Test
+    fun `разворот берёт свежий гид, если привязанный перестал обновляться`() = runTest {
+        playlist()
+        // Привязанный гид канала «Первый» кончился сутки назад: в развороте должна быть
+        // программа свежего канала того же бренда, а не пустое окно.
+        epgStore.replace(
+            Epg(
+                channels = listOf(
+                    EpgChannel(id = "old", displayName = "Первый"),
+                    EpgChannel(id = "fresh", displayName = "Первый HD"),
+                ),
+                programmes = listOf(
+                    Programme(
+                        channelId = "old",
+                        title = "Старая передача",
+                        start = now.minusSeconds(48 * 3600),
+                        end = now.minusSeconds(47 * 3600),
+                    ),
+                    Programme(
+                        channelId = "fresh",
+                        title = "Свежая передача",
+                        start = now.minusSeconds(600),
+                        end = now.plusSeconds(600),
+                    ),
+                ),
+            ),
+        )
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content }
+        model.selectChannel(ChannelId("one"))
+        advanceUntilIdle()
+
+        model.openProgramme()
+        advanceUntilIdle()
+
+        val content = model.state.first {
+            it is HomeUiState.Content && it.programmeOpen
+        } as HomeUiState.Content
+        assertThat(content.schedule.map { it.programme.title }).contains("Свежая передача")
     }
 
     @Test
@@ -683,7 +727,7 @@ class HomeViewModelTest {
             ),
         )
         val model = viewModel()
-        model.state.first { it is HomeUiState.Content }
+        awaitContent(model, "экран загружен") { true }
 
         model.selectCategory("основные")
         advanceUntilIdle()
@@ -708,9 +752,9 @@ class HomeViewModelTest {
         val model = viewModel()
 
         // Ждём состояние, в котором превью уже переведено на канал из истории.
-        val content = model.state.first {
-            it is HomeUiState.Content && it.previewVideoChannelId?.value == "two"
-        } as HomeUiState.Content
+        val content = awaitContent(model, "превью на канале из истории") {
+            it.previewVideoChannelId?.value == "two"
+        }
 
         assertThat(content.previewVideoChannel?.channel?.name).isEqualTo("Киноканал")
     }
@@ -719,7 +763,7 @@ class HomeViewModelTest {
     fun `фокус на канале не запускает превью до нажатия OK`() = runTest {
         playlist()
         val model = viewModel()
-        model.state.first { it is HomeUiState.Content }
+        awaitContent(model, "экран загружен") { true }
 
         model.selectChannel(ChannelId("two"))
         advanceUntilIdle()
@@ -727,6 +771,23 @@ class HomeViewModelTest {
         val after = model.state.first() as HomeUiState.Content
         assertThat(after.selectedChannelId).isEqualTo(ChannelId("two"))
         assertThat(after.previewVideoChannelId).isNull()
+    }
+
+    /** Ждёт состояние экрана, уступая реальное время: DataStore и Room работают вне виртуальных часов. */
+    private suspend fun awaitContent(
+        model: HomeViewModel,
+        reason: String,
+        predicate: (HomeUiState.Content) -> Boolean,
+    ): HomeUiState.Content {
+        val deadline = System.currentTimeMillis() + AWAIT_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            val content = model.state.value as? HomeUiState.Content
+            if (content != null && predicate(content)) return content
+            // Рекомендованный способ уступить реальное время внутри runTest: один поток
+            // Default, без конкуренции с подменой Dispatchers.Main между тестами.
+            withContext(Dispatchers.Default.limitedParallelism(1)) { delay(AWAIT_REAL_MS) }
+        }
+        throw AssertionError("не дождались состояния экрана: $reason")
     }
 
     private companion object {

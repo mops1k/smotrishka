@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
 import com.mops1k.smotrishka.tv.core.data.ChannelEpgStore
+import com.mops1k.smotrishka.tv.core.data.EpgProvider
 import com.mops1k.smotrishka.tv.core.data.EpgStore
 import com.mops1k.smotrishka.tv.core.data.FavoritesStore
 import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
@@ -18,7 +19,6 @@ import com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextSource
 import com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextSync
 import com.mops1k.smotrishka.tv.core.model.Channel
 import com.mops1k.smotrishka.tv.core.model.ChannelId
-import com.mops1k.smotrishka.tv.core.playlist.EpgResolver
 import com.mops1k.smotrishka.tv.epg.EpgUpdater
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -69,6 +69,7 @@ class HomeViewModel @Inject constructor(
     private val epgUpdater: EpgUpdater,
     private val searchRepository: SearchRepository,
     private val watchNextSync: WatchNextSync,
+    private val epgProvider: EpgProvider,
 ) : ViewModel() {
 
     /** Фоновая догрузка программы передач: каналы уже доступны, гид приходит позже. */
@@ -160,13 +161,6 @@ class HomeViewModel @Inject constructor(
 
     /** Сопоставление каналов с EPG из последней загрузки. */
     private var epgMatches: Map<ChannelId, String> = emptyMap()
-
-    /**
-     * Сохранённые связи каналов с гидом из последней загрузки.
-     *
-     * Используются и списком, и телепрограммой: считается один раз при обновлении каталога.
-     */
-    private var epgLinks: Map<ChannelId, String> = emptyMap()
 
     /** Избранные каналы. */
     private var favorites: Set<String> = emptySet()
@@ -748,10 +742,9 @@ class HomeViewModel @Inject constructor(
 
     /** Телепрограмма канала для разворота. */
     private suspend fun scheduleFor(channel: Channel): List<ProgrammeRowUi> {
-        // Связь канала с гидом берём из сохранённых связей (та же карта, что у списка):
-        // прежняя карта сопоставления больше не заполняется, из-за чего телепрограмма
-        // оставалась пустой.
-        val epgId = epgLinks[channel.id] ?: channel.epgId ?: return emptyList()
+        // Гид канала определяет общий вход провайдера: сохранённая связь → epgId канала →
+        // сопоставление по названию, с тем же выбором свежего источника, что у списка и плеера.
+        val epgId = epgProvider.epgId(channel, clock.instant()) ?: return emptyList()
         val now = clock.instant()
         // Ручной сдвиг гида: время передач у канала сдвинуто относительно эфира.
         val shift = secondsShift(channel)
@@ -880,8 +873,6 @@ class HomeViewModel @Inject constructor(
         // Связи каналов с гидом уже сохранены в базе: не читаем 3147 каналов гида
         // и не сопоставляем названия на каждом открытии экрана.
         val stored = withTimeoutOrNull(EPG_READ_TIMEOUT_MS) { channelEpgStore.links() }.orEmpty()
-        // Запоминаем связи: по ним же собирается развёрнутая телепрограмма канала.
-        epgLinks = stored
         if (stored.isEmpty()) {
             mark("связи с гидом пусты — показываем каналы, гид догрузится")
             // Первый запуск после обновления: собираем связи в фоне и перестраиваем экран.
@@ -898,14 +889,12 @@ class HomeViewModel @Inject constructor(
         }
         mark("связи с гидом ${stored.size}")
         // Единый порядок поиска гида для всех экранов: сохранённая связь → epgId канала →
-        // сопоставление по названию (EpgResolver). Иначе список показывал «Программы нет»
+        // сопоставление по названию (EpgProvider). Иначе список показывал «Программы нет»
         // там, где программа есть и видна в оверлее телепрограммы (замечание 09.11.2026).
+        // Свежие каналы гида нужны, чтобы привязанный, но переставший обновляться источник
+        // уступал одноимённому каналу другого гида (случай «4Ever Drama HD UA»).
         val links = runCatching {
-            EpgResolver.resolve(
-                channels = playlist.channels,
-                links = stored,
-                epgChannels = epgStore.epgChannels(),
-            )
+            epgProvider.links(playlist.channels, stored, now)
         }.getOrDefault(stored)
         // У каталога провайдера часто нет адресов логотипов, а в гиде они есть.
         // Подставляем иконку гида тем каналам, у которых своего логотипа нет.

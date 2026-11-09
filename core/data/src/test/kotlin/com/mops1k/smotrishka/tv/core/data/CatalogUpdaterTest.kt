@@ -57,6 +57,7 @@ class CatalogUpdaterTest {
     private lateinit var guideRepository: EpgGuideRepository
     private lateinit var guideState: EpgGuideStateStore
     private lateinit var settingsStore: PlayerSettingsStore
+    private lateinit var importTracker: EpgImportTracker
     private lateinit var scope: CoroutineScope
 
     private val clock = Clock.fixed(Instant.parse("2026-11-02T12:30:00Z"), ZoneOffset.UTC)
@@ -107,6 +108,7 @@ class CatalogUpdaterTest {
             File(tempFolder.root, "settings.preferences_pb")
         }
         guideState = EpgGuideStateStore(dataStore)
+        importTracker = EpgImportTracker(database.epgImportDao())
         settingsStore = PlayerSettingsStore(dataStore)
         val httpText = HttpTextClient(OkHttpClient())
         updater = CatalogUpdater(
@@ -127,8 +129,10 @@ class CatalogUpdaterTest {
                 client = HttpBytesClient(OkHttpClient()),
                 store = epgStore,
                 clock = clock,
+                tracker = importTracker,
             ),
             guideState = guideState,
+            importTracker = importTracker,
         )
     }
 
@@ -274,6 +278,44 @@ class CatalogUpdaterTest {
 
         // Плейлист дважды + гид один раз: второй раз гид ещё «свежий».
         assertThat(server.requestCount).isEqualTo(3)
+    }
+
+    @Test
+    fun `принудительное обновление перекачивает недавно загруженный гид`() = runTest {
+        val base = server.url("/").toString().trimEnd('/')
+        guideRepository.add(url = "$base/guide.xml.gz", name = "Мой гид")
+        // Первый проход: гид свежий, повторно не качается.
+        server.enqueue(MockResponse().setBody(playlistBody(base = base)))
+        server.enqueue(MockResponse().setBody(gzip(providerXmltv)))
+        updater.update(source = PlaylistSource.M3uUrl(url = "$base/list.m3u"))
+        assertThat(server.requestCount).isEqualTo(2)
+
+        // Полное обновление: свежесть игнорируется, гид пользователя скачивается заново.
+        // Адреса провайдера нет — проверяем именно обход 12-часового фильтра.
+        server.enqueue(MockResponse().setBody(gzip(providerXmltv)))
+        updater.updateEpgOnly(epgUrl = null, force = true)
+
+        assertThat(server.requestCount).isEqualTo(3)
+    }
+
+    @Test
+    fun `оборванный импорт гида повторяется в следующий проход`() = runTest {
+        val base = server.url("/").toString().trimEnd('/')
+        val guideUrl = "$base/guide.xml.gz"
+        guideRepository.add(url = guideUrl, name = "Мой гид")
+        // Первый проход: гид отвечает ошибкой — импорт прерван, запись остаётся в базе.
+        server.enqueue(MockResponse().setBody(playlistBody(base = base)))
+        server.enqueue(MockResponse().setResponseCode(500))
+        updater.update(source = PlaylistSource.M3uUrl(url = "$base/list.m3u"))
+        assertThat(importTracker.isUnfinished(guideUrl)).isTrue()
+
+        // Второй проход: гид качается заново и учёт снимается.
+        server.enqueue(MockResponse().setBody(playlistBody(base = base)))
+        server.enqueue(MockResponse().setBody(gzip(providerXmltv)))
+        updater.update(source = PlaylistSource.M3uUrl(url = "$base/list.m3u"))
+
+        assertThat(importTracker.isUnfinished(guideUrl)).isFalse()
+        assertThat(server.requestCount).isEqualTo(4)
     }
 
     @Test

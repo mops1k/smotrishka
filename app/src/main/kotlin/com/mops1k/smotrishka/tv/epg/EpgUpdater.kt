@@ -40,15 +40,17 @@ class EpgUpdater @Inject constructor(
      * Адреса у плейлиста может не быть — тогда программу соберут гиды пользователя
      * из настроек, и догрузку всё равно запускаем.
      *
-     * @param epgUrl адрес XMLTV из плейлиста либо `null`.
+     * @param epgUrl адрес XMLTV из плейлиста либо `null`;
+     * @param force полное обновление: кэш программы сбрасывается, гиды перекачиваются
+     *   независимо от того, как давно их загружали.
      */
-    fun update(epgUrl: String?) {
+    fun update(epgUrl: String?, force: Boolean = false) {
         if (_state.value is EpgUpdateState.Running) return
 
         scope.launch {
             _state.value = EpgUpdateState.Running
             _state.value = try {
-                when (val result = catalogUpdater.updateEpgOnly(epgUrl)) {
+                when (val result = catalogUpdater.updateEpgOnly(epgUrl, force = force)) {
                     is UpdateResult.Success -> EpgUpdateState.Done(result.programmes)
                     // Гид провайдера не загрузился, но гиды пользователя что-то добавили:
                     // для экрана это успех, причина уходит в лог.

@@ -1,20 +1,22 @@
 package com.mops1k.smotrishka.tv.core.data
 
-import java.time.Duration
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Планирует обновление гида по фактическому концу покрытия.
+ * Планирует обновление гида по завершённости импорта и концу сетки.
  *
- * Расписание привязано не к «прошло N часов с обновления», а к последней передаче в базе:
- * гид обновляется за [UpdateScheduler.GUIDE_LEAD_HOURS] до её окончания. Поэтому покрытие
- * зависит от глубины программы, которую отдаёт источник и настройки, и пробела не возникает.
+ * Если прошлая загрузка не дочитана до конца (в базе осталась запись [EpgImportTracker]),
+ * гид перекачивается сразу при запуске: покрытие каналов тут не годится — части каналов нет
+ * в публичных гидах вообще. Иначе обновление ставится за [UpdateScheduler.GUIDE_LEAD_HOURS]
+ * до последней передачи в базе. Само решение — в [GuideRefreshPolicy], здесь только сбор
+ * данных и постановка задачи.
  */
 @Singleton
 class GuideRefreshPlanner @Inject constructor(
     private val epgStore: EpgStore,
+    private val importTracker: EpgImportTracker,
     private val scheduler: UpdateScheduler,
 ) {
 
@@ -25,11 +27,18 @@ class GuideRefreshPlanner @Inject constructor(
      * @return задержка до обновления в миллисекундах (0 — обновляем сразу).
      */
     suspend fun plan(now: Instant = Instant.now()): Long {
-        val coverageEnd = epgStore.coverageEnd()
-        val delay = coverageEnd?.let { end ->
-            val target = end.minusSeconds(UpdateScheduler.GUIDE_LEAD_HOURS * 3600)
-            if (target.isAfter(now)) Duration.between(now, target).toMillis() else 0L
-        } ?: 0L
+        val unfinished = runCatching { importTracker.unfinished() }.getOrDefault(emptyList())
+        val delay = GuideRefreshPolicy.delayMillis(
+            now = now,
+            coverageEnd = runCatching { epgStore.coverageEnd() }.getOrNull(),
+            hasUnfinishedImport = unfinished.isNotEmpty(),
+        )
+        if (delay == 0L) {
+            android.util.Log.d(
+                "SmotrishkaSync",
+                "гид обновим сразу: незавершённых импортов ${unfinished.size}",
+            )
+        }
         scheduler.scheduleGuideRefresh(delay)
         return delay
     }

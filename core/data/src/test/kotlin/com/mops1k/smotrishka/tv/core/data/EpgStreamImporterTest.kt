@@ -145,7 +145,7 @@ class EpgStreamImporterTest {
     }
 
     @Test
-    fun `неоднозначное имя не привязывается`() = runTest {
+    fun `неоднозначное имя не даёт привязки к гиду`() = runTest {
         server.enqueue(
             MockResponse().setBody(
                 gzip(
@@ -169,8 +169,11 @@ class EpgStreamImporterTest {
             catalogChannels = listOf(channel(id = "1", name = "Кино")),
         )
 
-        assertThat(result).isEqualTo(EpgStreamResult.Success(0))
-        assertThat(store.epgChannels()).isEmpty()
+        // Кандидаты хранятся оба: провайдер сам решит по свежести, но угадывать
+        // между одноимёнными каналами он не должен.
+        assertThat(store.epgChannels().map { it.id }).containsExactly("a", "b")
+        val index = com.mops1k.smotrishka.tv.core.playlist.EpgIndex(store.epgChannels())
+        assertThat(index.primary(channel(id = "1", name = "Кино"), emptyMap())).isNull()
     }
 
     @Test

@@ -120,6 +120,7 @@ fun SettingsScreen(
     val archiveDepthHours by viewModel.archiveDepthHours.collectAsStateWithLifecycle()
     val osdHideSeconds by viewModel.osdHideSeconds.collectAsStateWithLifecycle()
     val guides by viewModel.guides.collectAsStateWithLifecycle()
+    val epgRunning by viewModel.epgRunning.collectAsStateWithLifecycle()
     val guideBusy by viewModel.guideBusy.collectAsStateWithLifecycle()
     val guideMessage by viewModel.guideMessage.collectAsStateWithLifecycle()
     val aspectMode by viewModel.aspectMode.collectAsStateWithLifecycle()
@@ -218,6 +219,8 @@ fun SettingsScreen(
                             osdHideSeconds = osdHideSeconds,
                             guides = guides,
                             guideMessage = guideMessage,
+                            epgRunning = epgRunning,
+                            onRefreshEpg = viewModel::refreshEpgCompletely,
                             onEpgWindow = viewModel::setEpgWindowHours,
                             onArchiveDepth = viewModel::setArchiveDepthHours,
                             onGlobalShift = viewModel::setGlobalEpgShift,
@@ -630,6 +633,9 @@ private fun EpgCard(
     osdHideSeconds: Int,
     guides: List<EpgGuide>,
     guideMessage: String?,
+    // Идёт полное обновление программы: кнопка блокируется и показывает прогресс.
+    epgRunning: Boolean,
+    onRefreshEpg: () -> Unit,
     onEpgWindow: (Int) -> Unit,
     onArchiveDepth: (Int) -> Unit,
     onGlobalShift: (Int) -> Unit,
@@ -705,6 +711,13 @@ private fun EpgCard(
             )
         }
 
+        SettingsRow(
+            title = "Программа передач целиком",
+            value = if (epgRunning) "обновляется…" else null,
+            hint = "Сбросить кэш и скачать программу заново со всех источников",
+            action = if (epgRunning) "Обновляется…" else "Обновить",
+            onAction = onRefreshEpg,
+        )
         SettingsRow(
             title = "Источники программы передач",
             value = if (guides.isEmpty()) "нет" else "${guides.size}",

@@ -43,6 +43,7 @@ class CatalogUpdater(
     private val guideRepository: EpgGuideRepository? = null,
     private val streamImporter: EpgStreamImporter? = null,
     private val guideState: EpgGuideStateStore? = null,
+    private val importTracker: EpgImportTracker? = null,
 ) {
 
     /**
@@ -180,9 +181,12 @@ class CatalogUpdater(
      * программу передач (заголовок `x-tvg-url`), и старая программа к нему не относится.
      * Если адреса нет, программа всё равно собирается из гидов пользователя.
      *
-     * @param epgUrl адрес XMLTV либо `null`, если у плейлиста его нет.
+     * @param epgUrl адрес XMLTV либо `null`, если у плейлиста его нет;
+     * @param force полное обновление: кэш программы сбрасывается, а гиды перекачиваются
+     *   независимо от того, как давно их загружали.
      */
-    suspend fun updateEpgOnly(epgUrl: String?): UpdateResult = withContext(Dispatchers.IO) {
+    suspend fun updateEpgOnly(epgUrl: String?, force: Boolean = false): UpdateResult =
+        withContext(Dispatchers.IO) {
         val now = clock.instant()
         val epgWindow = settings.epgWindowHours.first().toLong()
         val archiveDepth = settings.archiveDepthHours.first().toLong()
@@ -197,6 +201,12 @@ class CatalogUpdater(
         val catalogChannels = runCatching { catalogStore.playlist().channels }.getOrDefault(emptyList())
         val importer = streamImporter
         val url = epgUrl?.takeIf { it.isNotBlank() }
+        if (force) {
+            // Полное обновление: стираем всё, что было, чтобы не осталось данных от гидов,
+            // которые больше не должны участвовать (просьба Александра 10.11.2026).
+            android.util.Log.d("SmotrishkaSync", "epg full refresh: кэш программы сброшен")
+            epgStore.clear()
+        }
         if (url == null) {
             // Адреса нет: программа собирается только из гидов пользователя, старое чистим.
             epgStore.clear()
@@ -241,6 +251,7 @@ class CatalogUpdater(
             backHours = backHours,
             catalogChannels = catalogChannels,
             loadedProviderUrl = loadedProviderUrl,
+            force = force,
         )
 
         val failureReason = reason
@@ -271,6 +282,7 @@ class CatalogUpdater(
         backHours: Long,
         catalogChannels: List<Channel>,
         loadedProviderUrl: String?,
+        force: Boolean = false,
     ): Int {
         val guides = runCatching { guideRepository?.guides().orEmpty() }.getOrDefault(emptyList())
         if (guides.isEmpty()) return 0
@@ -290,7 +302,19 @@ class CatalogUpdater(
                 return@forEach
             }
 
-            if (isCatalogCovered(from, to, expectedChannels)) {
+            // Незавершённый импорт важнее свежести: прошлая загрузка оборвалась, и программа
+            // осталась полупустой (требование Александра 10.11.2026).
+            val unfinished = importTracker?.isUnfinished(guide.url) == true
+            if (unfinished) {
+                android.util.Log.d(
+                    "SmotrishkaSync",
+                    "epg guide: ${guide.name} прошлый импорт не завершён — качаем заново",
+                )
+            }
+
+            // Принудительное обновление игнорирует «каталог уже покрыт» и «качали недавно»:
+            // пользователь явно попросил перекачать программу целиком (10.11.2026).
+            if (!force && !unfinished && isCatalogCovered(from, to, expectedChannels)) {
                 android.util.Log.d(
                     "SmotrishkaSync",
                     "epg guide: ${guide.name} пропущен — каталог уже покрыт программой",
@@ -298,7 +322,7 @@ class CatalogUpdater(
                 return@forEach
             }
 
-            if (isFresh(guide, now)) {
+            if (!force && !unfinished && isFresh(guide, now)) {
                 android.util.Log.d(
                     "SmotrishkaSync",
                     "epg guide: ${guide.name} пропущен — загружали меньше ${GUIDE_REFRESH_HOURS} ч назад",

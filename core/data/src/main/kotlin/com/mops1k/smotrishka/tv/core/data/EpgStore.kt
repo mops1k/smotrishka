@@ -210,6 +210,65 @@ class EpgStore(
         dao.countCoveredChannels(from.toEpochMilli(), to.toEpochMilli())
 
     /**
+     * Каналы гида, у которых есть передачи в интервале.
+     *
+     * Нужны, чтобы выбрать свежий гид, когда привязанный по `tvg-id` источник перестал
+     * обновлять канал: у одного канала в разных гидах разные идентификаторы.
+     *
+     * @param from начало интервала;
+     * @param to конец интервала.
+     */
+    suspend fun coveredChannelIds(from: Instant, to: Instant): Set<String> =
+        dao.coveredChannelIds(from.toEpochMilli(), to.toEpochMilli()).toSet()
+
+    /**
+     * Каналы гида со свежими передачами вокруг момента.
+     *
+     * @param now текущий момент;
+     * @param hours половина окна в часах: проверяются передачи от `now - hours` до `now + hours`.
+     */
+    suspend fun freshChannelIds(now: Instant, hours: Long = FRESH_HOURS): Set<String> =
+        coveredChannelIds(now.minus(hours, ChronoUnit.HOURS), now.plus(hours, ChronoUnit.HOURS))
+
+    /**
+     * Похожи ли сетки двух каналов гида в окне.
+     *
+     * Сверяются времена начала передач с допуском: один и тот же канал в разных гидах имеет
+     * одинаковую сетку, а разные каналы с похожим названием — нет. Строки-заглушки
+     * («Програма відсутня», «Нет программы») не участвуют: у epg.one они занимают по 12 часов
+     * и никогда не совпадают с реальной сеткой другого гида (проверено 10.11.2026).
+     * Проверка защищает фолбэк на свежий гид от подмены программы чужого канала.
+     *
+     * @param first канал гида из сохранённой связи;
+     * @param second канал гида-кандидата;
+     * @param from начало окна сверки;
+     * @param to конец окна сверки;
+     * @return `true`, если совпала хотя бы половина передач (и минимум две), либо сверить
+     *   нечем — у одного из каналов в окне нет настоящих передач.
+     */
+    suspend fun sameSchedule(first: String, second: String, from: Instant, to: Instant): Boolean {
+        val left = dao.startsWithTitles(first, from.toEpochMilli(), to.toEpochMilli())
+            .filterNot { EpgPlaceholders.isPlaceholder(it.title) }
+            .map { it.startAt }
+        val right = dao.startsWithTitles(second, from.toEpochMilli(), to.toEpochMilli())
+            .filterNot { EpgPlaceholders.isPlaceholder(it.title) }
+            .map { it.startAt }
+        if (left.isEmpty() || right.isEmpty()) return true
+        val common = left.count { start -> right.any { kotlin.math.abs(it - start) <= MINUTE_MS } }
+        return common >= MIN_COMMON_PROGRAMMES && common * 2 >= minOf(left.size, right.size)
+    }
+
+    /**
+     * Название передачи канала, идущей в момент.
+     *
+     * @param channelId канал гида;
+     * @param at момент;
+     * @return название или `null`, если передачи нет.
+     */
+    suspend fun currentTitle(channelId: String, at: Instant): String? =
+        dao.currentTitle(channelId, at.toEpochMilli())
+
+    /**
      * Удаляет передачи за пределами окна хранения.
      *
      * @param now текущий момент;
@@ -227,5 +286,15 @@ class EpgStore(
 
         /** Максимальная длительность передачи: запас для нижней границы выборки. */
         const val PROGRAMME_MAX_HOURS = 8L
+
+        /** Половина окна свежести гида: столько часов назад и вперёд ищем передачи. */
+        const val FRESH_HOURS = 12L
+
+        /** Допуск при сверке сеток: время начала может отличаться на несколько минут. */
+        const val MINUTE_MS = 10L * 60_000L
+
+        /** Минимум общих передач, чтобы считать сетки одинаковыми: у «умирающего» гида
+         * за сутки может остаться одна настоящая передача, и одного совпадения достаточно. */
+        const val MIN_COMMON_PROGRAMMES = 1
     }
 }
