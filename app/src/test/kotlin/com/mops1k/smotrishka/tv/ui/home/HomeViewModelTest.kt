@@ -1,5 +1,7 @@
 package com.mops1k.smotrishka.tv.ui.home
 
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
@@ -73,6 +75,9 @@ class HomeViewModelTest {
 
     private val now: Instant = Instant.parse("2026-11-02T20:00:00Z")
 
+    /** Созданные ViewModel: их скоупы гасим до resetMain, иначе корутины переживут тест. */
+    private val viewModels = mutableListOf<ViewModel>()
+
     @Before
     fun setUp() {
         mainDispatcher = UnconfinedTestDispatcher()
@@ -99,6 +104,7 @@ class HomeViewModelTest {
         // Отложенные публикации ленты и подписки ViewModel не должны пережить тест:
         // иначе их продолжения попадают в следующий тест и ломают его планировщик.
         mainDispatcher.scheduler.advanceUntilIdle()
+        viewModels.forEach { it.viewModelScope.cancel() }
         Dispatchers.resetMain()
         settingsScope.cancel()
         database.close()
@@ -124,7 +130,7 @@ class HomeViewModelTest {
         epgUpdater = epgUpdater(),
         searchRepository = searchRepository,
         watchNextSync = watchNextSync,
-    )
+    ).also { viewModels += it }
 
     /** Связи каналов с гидом: на них же опирается лента «Сейчас идёт». */
     private fun channelEpgStore() = ChannelEpgStore(
@@ -162,11 +168,14 @@ class HomeViewModelTest {
                     Category(id = "основные", name = "Основные"),
                     Category(id = "кино", name = "Кино"),
                 ),
+                // Логотипы обязательны: лента «Сейчас идёт» публикует только каналы с постером
+                // (TvProvider не копирует картинку, и карточка без логотипа выглядит пустой).
                 channels = listOf(
                     Channel(
                         id = ChannelId("one"),
                         name = "Первый",
                         streamUrl = "http://example.com/one.m3u8",
+                        logoUrl = "http://example.com/one.png",
                         categoryId = "основные",
                         epgId = "one",
                     ),
@@ -174,6 +183,7 @@ class HomeViewModelTest {
                         id = ChannelId("two"),
                         name = "Киноканал",
                         streamUrl = "http://example.com/two.m3u8",
+                        logoUrl = "http://example.com/two.png",
                         categoryId = "кино",
                     ),
                 ),

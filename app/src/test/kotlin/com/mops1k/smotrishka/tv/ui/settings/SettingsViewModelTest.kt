@@ -3,6 +3,8 @@ package com.mops1k.smotrishka.tv.ui.settings
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
@@ -80,6 +82,9 @@ class SettingsViewModelTest {
     private lateinit var scope: CoroutineScope
     private lateinit var watchNextSync: RecordingWatchNextSync
 
+    /** Созданные ViewModel: их скоупы гасим до resetMain, иначе корутины переживут тест. */
+    private val viewModels = mutableListOf<ViewModel>()
+
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -125,6 +130,7 @@ class SettingsViewModelTest {
 
     @After
     fun tearDown() {
+        viewModels.forEach { it.viewModelScope.cancel() }
         Dispatchers.resetMain()
         server.shutdown()
         scope.cancel()
@@ -150,7 +156,7 @@ class SettingsViewModelTest {
         epgGuideRepository = guideRepository,
         epgGuideValidator = guideValidator,
         watchNextSync = watchNextSync,
-    )
+    ).also { viewModels += it }
 
     @Test
     fun `буфер по умолчанию пять секунд`() = runTest {

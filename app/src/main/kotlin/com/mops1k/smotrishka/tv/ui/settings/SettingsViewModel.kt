@@ -200,7 +200,12 @@ class SettingsViewModel @Inject constructor(
         }
         refresh()
         refreshGuides()
-        viewModelScope.launch { _status.value = syncStatusStore.last()?.message }
+        // Статус прошлого обновления не должен затирать свежий: чтение DataStore в init
+        // медленнее, чем updateData(), и на медленном раннере поздняя запись обнуляла статус.
+        viewModelScope.launch {
+            val stored = syncStatusStore.last()?.message
+            if (stored != null && _status.value == null) _status.value = stored
+        }
     }
 
     /** Перечитывает активный источник (например, после возврата с онбординга). */

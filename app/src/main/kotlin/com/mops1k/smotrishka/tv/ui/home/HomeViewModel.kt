@@ -575,7 +575,10 @@ class HomeViewModel @Inject constructor(
                 return@launch
             }
             val limit = settingsStore.watchNextLimit.first()
-            val lastCategory = settingsStore.lastCategory.first()
+            // Категория берётся из памяти: selectCategory пишет настройку асинхронно, и чтение
+            // из хранилища в этой же корутине ещё видит прошлую категорию — лента собиралась
+            // со старым приоритетом и больше не пересобиралась.
+            val lastCategory = lastTvCategoryId
                 ?.takeUnless { it == PlayerSettingsStore.ALL_CATEGORY }
             val cards = watchNextBuilder.build(
                 favourites = favorites,

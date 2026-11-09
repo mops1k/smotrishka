@@ -3,6 +3,8 @@ package com.mops1k.smotrishka.tv.ui.onboarding
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
@@ -74,6 +76,9 @@ class OnboardingViewModelTest {
     private lateinit var backupService: SettingsBackupService
     private lateinit var scope: CoroutineScope
 
+    /** Созданные ViewModel: их скоупы гасим до resetMain, иначе корутины переживут тест. */
+    private val viewModels = mutableListOf<ViewModel>()
+
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -119,6 +124,7 @@ class OnboardingViewModelTest {
 
     @After
     fun tearDown() {
+        viewModels.forEach { it.viewModelScope.cancel() }
         Dispatchers.resetMain()
         scope.cancel()
         server.shutdown()
@@ -131,7 +137,7 @@ class OnboardingViewModelTest {
         EpgUpdater(updater),
         backupService,
         ApplicationProvider.getApplicationContext(),
-    )
+    ).also { viewModels += it }
 
     @Test
     fun `онбординг завершается после каталога, не дожидаясь программы передач`() = runBlocking {

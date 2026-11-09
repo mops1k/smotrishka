@@ -3,6 +3,8 @@ package com.mops1k.smotrishka.tv.ui.player
 import android.net.Uri
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
@@ -63,6 +65,9 @@ class PlayerViewModelTest {
 
     private val now: Instant = Instant.parse("2026-11-02T20:00:00Z")
 
+    /** Созданные ViewModel: их скоупы гасим до resetMain, иначе корутины переживут тест. */
+    private val viewModels = mutableListOf<ViewModel>()
+
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -81,6 +86,7 @@ class PlayerViewModelTest {
 
     @After
     fun tearDown() {
+        viewModels.forEach { it.viewModelScope.cancel() }
         Dispatchers.resetMain()
         settingsScope.cancel()
         database.close()
@@ -105,7 +111,7 @@ class PlayerViewModelTest {
                 PlayerViewModel.ARG_START to startEpoch,
             ),
         ),
-    )
+    ).also { viewModels += it }
 
     private suspend fun playlist() {
         catalogStore.replaceCatalog(

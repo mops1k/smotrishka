@@ -1,6 +1,8 @@
 package com.mops1k.smotrishka.tv.ui.programme
 
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
@@ -53,6 +55,9 @@ class ProgrammeViewModelTest {
 
     private val now: Instant = Instant.parse("2026-11-03T20:00:00Z")
 
+    /** Созданные ViewModel: их скоупы гасим до resetMain, иначе корутины переживут тест. */
+    private val viewModels = mutableListOf<ViewModel>()
+
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -70,6 +75,7 @@ class ProgrammeViewModelTest {
 
     @After
     fun tearDown() {
+        viewModels.forEach { it.viewModelScope.cancel() }
         Dispatchers.resetMain()
         settingsScope.cancel()
         database.close()
@@ -82,7 +88,7 @@ class ProgrammeViewModelTest {
         settingsStore = PlayerSettingsStore(dataStore),
         clock = Clock.fixed(now, ZoneOffset.UTC),
         savedStateHandle = SavedStateHandle(mapOf(ProgrammeViewModel.ARG_CHANNEL_ID to channelId)),
-    )
+    ).also { viewModels += it }
 
     private suspend fun playlist() {
         catalogStore.replaceCatalog(
