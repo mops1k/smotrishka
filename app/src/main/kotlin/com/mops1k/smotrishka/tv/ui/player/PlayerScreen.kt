@@ -68,10 +68,12 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -191,7 +193,7 @@ fun PlayerScreen(
             viewModel.refreshProgramme()
         }
     }
-    val retryAttempts by viewModel.retryAttempts.collectAsStateWithLifecycle()
+    val recoveryDelaySeconds by viewModel.recoveryDelaySeconds.collectAsStateWithLifecycle()
     val audioLanguage by viewModel.audioLanguage.collectAsStateWithLifecycle()
 
     BackHandler(onBack = onBack)
@@ -226,7 +228,7 @@ fun PlayerScreen(
                 channel = current,
                 bufferSeconds = bufferSeconds,
                 quality = quality,
-                retryAttempts = retryAttempts,
+                recoveryDelaySeconds = recoveryDelaySeconds,
                 audioLanguage = audioLanguage,
                 direct = direct,
                 onBack = onBack,
@@ -266,7 +268,7 @@ private fun PlayerContent(
     channel: PlayerUiState.Content,
     bufferSeconds: Int,
     quality: VideoQuality,
-    retryAttempts: Int,
+    recoveryDelaySeconds: Int,
     audioLanguage: AudioLanguage,
     direct: Boolean,
     onBack: () -> Unit,
@@ -322,7 +324,14 @@ private fun PlayerContent(
     }
     val buffer = remember(bufferSeconds) { PlayerBuffer(bufferSeconds) }
 
-    var unavailable by remember(channel.streamUrl) { mutableStateOf(false) }
+    // Восстановление потока не заканчивается само: счётчик нужен для паузы и для счётчика
+    // на крутилке, поколение — чтобы каждую третью попытку пересоздать плеер целиком.
+    var recoveryAttempts by remember(channel.streamUrl) { mutableStateOf(0) }
+    var playerGeneration by remember(channel.streamUrl) { mutableStateOf(0) }
+    // Сколько ждать до следующей попытки: дедлайн и длина паузы — из них считается
+    // прогресс и обратный отсчёт на экране.
+    var retryDeadlineMillis by remember(channel.streamUrl) { mutableStateOf<Long?>(null) }
+    var retryDelayMillis by remember(channel.streamUrl) { mutableLongStateOf(0L) }
     // Размер кадра нужен масштабу TextureView: у SurfaceView это делал PlayerView сам.
     var videoSize by remember(channel.streamUrl) { mutableStateOf(VideoSize.UNKNOWN) }
 
@@ -483,7 +492,7 @@ private fun PlayerContent(
     }
 
     // archiveProgressSeconds в ключах: плеер архива должен создаться заново, когда появятся сегменты.
-    val player = remember(channel.streamUrl, liveReady, streamUrl, buffer, quality, archiveUri, archiveProgressSeconds >= ARCHIVE_MIN_SEGMENT_SECONDS, archiveGeneration) {
+    val player = remember(channel.streamUrl, liveReady, streamUrl, buffer, quality, archiveUri, archiveProgressSeconds >= ARCHIVE_MIN_SEGMENT_SECONDS, archiveGeneration, playerGeneration) {
         // Архив играем из файла и без live-конфигурации: у файла есть конец.
         if (channel.isArchive) {
             val archiveUrl = streamUrl ?: return@remember null
@@ -497,7 +506,9 @@ private fun PlayerContent(
                     live = false,
                     startPositionMs = archiveRestartPosition,
                 )
-            }.onFailure { unavailable = true }.getOrNull().also { playerRef = it }
+            }.onFailure { error ->
+                android.util.Log.e("SmotrishkaPlayer", "не удалось создать плеер архива", error)
+            }.getOrNull().also { playerRef = it }
         }
         val url = streamUrl
         android.util.Log.d("SmotrishkaBuffer", "remember player: liveReady=$liveReady url=$url useBuffer=$useBuffer")
@@ -505,7 +516,9 @@ private fun PlayerContent(
         playerCreatedAt = System.currentTimeMillis()
         android.util.Log.d("SmotrishkaBuffer", "creating player for $url")
         runCatching { buildPlayer(context = context, url = url, buffer = buffer, quality = quality) }
-            .onFailure { unavailable = true }
+            .onFailure { error ->
+                android.util.Log.e("SmotrishkaPlayer", "не удалось создать плеер", error)
+            }
             .getOrNull()
             .also { playerRef = it }
     }
@@ -655,20 +668,34 @@ private fun PlayerContent(
 
     // Поток на слабом канале может оборваться: плеер сам повторяет попытку,
     // пользователю не нужно вручную нажимать «играть».
+    // Адрес, который играет сейчас: повтор должен идти туда же, а не в поток провайдера —
+    // в режиме буфера и архива это разные адреса.
+    val currentStreamUrl by rememberUpdatedState(streamUrl)
+
     DisposableEffect(player) {
-        var attempts = 0
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                if (!PlayerRecovery.canRetry(attempts, retryAttempts)) {
-                    unavailable = true
-                    return
-                }
-                attempts++
+                // Плеер не сдаётся: человек мог уснуть перед телевизором, а поток вернётся сам.
+                // Пауза растёт до потолка из настроек, попытки не заканчиваются.
+                val attempt = recoveryAttempts + 1
+                recoveryAttempts = attempt
+                val pausedFor = PlayerRecovery.delayBefore(attempt, recoveryDelaySeconds.seconds)
+                android.util.Log.w(
+                    "SmotrishkaPlayer",
+                    "ошибка потока ${error.errorCodeName}, попытка $attempt через $pausedFor",
+                )
                 scope.launch {
-                    delay(PlayerRecovery.delayBefore(attempts))
-                    player.setMediaItem(PlayerLive.mediaItem(channel.streamUrl))
-                    player.prepare()
-                    player.playWhenReady = true
+                    retryDelayMillis = pausedFor.inWholeMilliseconds
+                    retryDeadlineMillis = System.currentTimeMillis() + pausedFor.inWholeMilliseconds
+                    delay(pausedFor.inWholeMilliseconds)
+                    retryDeadlineMillis = null
+                    if (PlayerRecovery.shouldRecreate(attempt)) {
+                        playerGeneration++
+                    } else {
+                        player.setMediaItem(PlayerLive.mediaItem(currentStreamUrl ?: channel.streamUrl))
+                        player.prepare()
+                        player.playWhenReady = true
+                    }
                 }
             }
 
@@ -691,8 +718,14 @@ private fun PlayerContent(
                     "player state=$playbackState position=${player.currentPosition} duration=${player.duration}",
                 )
                 if (playbackState == Player.STATE_READY) {
-                    attempts = 0
-                    unavailable = false
+                    if (recoveryAttempts > 0) {
+                        android.util.Log.i(
+                            "SmotrishkaPlayer",
+                            "поток восстановлен после $recoveryAttempts попыток",
+                        )
+                    }
+                    recoveryAttempts = 0
+                    retryDeadlineMillis = null
                 }
                 // Дошли до конца записанного: файл ещё растёт, продолжаем с той же позиции,
                 // когда в буфере прибавится данных.
@@ -709,6 +742,35 @@ private fun PlayerContent(
         }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
+    }
+
+    // Плеер вообще не создался: пробуем снова с той же растущей паузой, без сообщений.
+    LaunchedEffect(channel.streamUrl, streamUrl, liveReady, player, playerGeneration, recoveryAttempts) {
+        if (streamUrl == null || player != null) return@LaunchedEffect
+        if (!liveReady && !channel.isArchive) return@LaunchedEffect
+        val attempt = recoveryAttempts + 1
+        recoveryAttempts = attempt
+        val pausedFor = PlayerRecovery.delayBefore(attempt, recoveryDelaySeconds.seconds)
+        android.util.Log.w("SmotrishkaPlayer", "плеер не создан, попытка $attempt через $pausedFor")
+        retryDelayMillis = pausedFor.inWholeMilliseconds
+        retryDeadlineMillis = System.currentTimeMillis() + pausedFor.inWholeMilliseconds
+        delay(pausedFor.inWholeMilliseconds)
+        retryDeadlineMillis = null
+        playerGeneration++
+    }
+
+    // Плеер создан, но так и не дошёл до READY: пересоздаём, иначе экран застынет на крутилке.
+    LaunchedEffect(player, playerGeneration) {
+        val active = player ?: return@LaunchedEffect
+        delay(PlayerRecovery.FIRST_FRAME_TIMEOUT.inWholeMilliseconds)
+        if (active.playbackState != Player.STATE_READY) {
+            android.util.Log.w(
+                "SmotrishkaPlayer",
+                "плеер не дошёл до READY за ${PlayerRecovery.FIRST_FRAME_TIMEOUT}, пересоздаём",
+            )
+            recoveryAttempts += 1
+            playerGeneration++
+        }
     }
 
     // Сторож зависания: эфир играется из растущего файла, поэтому нельзя перескакивать
@@ -1295,8 +1357,54 @@ private fun PlayerContent(
             }
         }
 
-        if (unavailable) {
-            UnavailableStream(onBack = onBack)
+        if (recoveryAttempts > 0 && !playerReady) {
+            // Крутилка вместо сообщения об ошибке: видно, что плеер жив и пробует снова,
+            // а не завис навсегда. Пока идёт пауза — обратный отсчёт и прогресс ожидания.
+            // Фокус не перехватывает — «назад» и OSD работают.
+            val deadline = retryDeadlineMillis
+            val totalDelay = retryDelayMillis
+            var nowMillis by remember(deadline) { mutableLongStateOf(System.currentTimeMillis()) }
+            LaunchedEffect(deadline) {
+                if (deadline == null) return@LaunchedEffect
+                while (true) {
+                    nowMillis = System.currentTimeMillis()
+                    if (nowMillis >= deadline) break
+                    delay(RETRY_TICK_MS)
+                }
+            }
+            val waitingSince = deadline?.minus(totalDelay)
+            val elapsed = (nowMillis - (waitingSince ?: nowMillis)).coerceAtLeast(0L)
+            val progress = PlayerRecovery.retryProgress(elapsed, totalDelay)
+            val secondsLeft = PlayerRecovery.secondsLeft(elapsed, totalDelay)
+            Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                if (deadline == null) {
+                    CircularProgressIndicator()
+                } else {
+                    CircularProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.size(48.dp),
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "Восстанавливаем поток…",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = if (secondsLeft > 0) {
+                        "Повтор через $secondsLeft с · попытка $recoveryAttempts"
+                    } else {
+                        "Подключаемся… · попытка $recoveryAttempts"
+                    },
+                    color = Color.White.copy(alpha = 0.7f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
 
         val reduceMotion = LocalReduceMotion.current
@@ -1490,32 +1598,6 @@ private fun PlayerContent(
                     }
                 }
             }
-        }
-    }
-}
-
-/**
- * Сообщение о недоступном потоке.
- *
- * @param onBack возврат к списку каналов.
- */
-@Composable
-private fun UnavailableStream(onBack: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.6f))
-            .windowInsetsPadding(WindowInsets.safeDrawing),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = "Поток недоступен",
-                style = MaterialTheme.typography.headlineSmall,
-                color = Color.White,
-            )
-            Spacer(Modifier.height(12.dp))
-            Button(onClick = onBack) { Text("Назад к каналам") }
         }
     }
 }
@@ -1945,6 +2027,9 @@ private const val SESSION_LOG_INTERVAL_MS = 60_000L
 
 /** Байт в мегабайте: память в журнале пишется в МБ. */
 private const val MEGABYTE = 1024L * 1024
+
+/** Как часто обновляется обратный отсчёт восстановления потока. */
+private const val RETRY_TICK_MS = 200L
 
 /** Текущее время без секунд для правого верхнего угла OSD. */
 private fun currentClockText(): String =

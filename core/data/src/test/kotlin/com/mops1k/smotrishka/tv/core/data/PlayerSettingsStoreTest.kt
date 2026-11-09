@@ -73,15 +73,22 @@ class PlayerSettingsStoreTest {
     }
 
     @Test
-    fun `повторы по умолчанию пять`() = runTest {
-        assertThat(store.retryAttempts.first()).isEqualTo(5)
+    fun `потолок паузы восстановления по умолчанию десять секунд`() = runTest {
+        assertThat(store.recoveryDelaySeconds.first()).isEqualTo(10)
     }
 
     @Test
-    fun `выбранное число повторов сохраняется`() = runTest {
-        store.setRetryAttempts(8)
+    fun `выбранный потолок паузы сохраняется`() = runTest {
+        store.setRecoveryDelaySeconds(15)
 
-        assertThat(store.retryAttempts.first()).isEqualTo(8)
+        assertThat(store.recoveryDelaySeconds.first()).isEqualTo(15)
+    }
+
+    @Test
+    fun `потолок паузы приводится к краям списка`() = runTest {
+        store.setRecoveryDelaySeconds(1)
+
+        assertThat(store.recoveryDelaySeconds.first()).isEqualTo(5)
     }
 
     @Test

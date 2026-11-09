@@ -1,13 +1,18 @@
 package com.mops1k.smotrishka.tv.ui.onboarding
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mops1k.smotrishka.tv.core.data.CatalogUpdateResult
 import com.mops1k.smotrishka.tv.core.data.CatalogUpdater
 import com.mops1k.smotrishka.tv.core.data.SourceRepository
+import com.mops1k.smotrishka.tv.core.data.backup.SettingsBackupService
+import com.mops1k.smotrishka.tv.core.data.backup.SettingsImportResult
 import com.mops1k.smotrishka.tv.epg.EpgUpdater
 import com.mops1k.smotrishka.tv.core.model.PlaylistSource
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,13 +28,17 @@ import javax.inject.Inject
  *
  * @param sourceRepository хранение активного источника;
  * @param updater загрузка каталога;
- * @param epgUpdater фоновая догрузка программы передач.
+ * @param epgUpdater фоновая догрузка программы передач;
+ * @param backupService восстановление настроек из файла;
+ * @param context контекст приложения для чтения файла настроек.
  */
 @HiltViewModel
 class OnboardingViewModel @Inject constructor(
     private val sourceRepository: SourceRepository,
     private val updater: CatalogUpdater,
     private val epgUpdater: EpgUpdater,
+    private val backupService: SettingsBackupService,
+    @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<OnboardingUiState>(OnboardingUiState.Idle)
@@ -90,6 +99,56 @@ class OnboardingViewModel @Inject constructor(
     /** Возвращает экран в исходное состояние (например, после ошибки). */
     fun reset() {
         _state.value = OnboardingUiState.Idle
+    }
+
+    /**
+     * Восстанавливает настройки из файла: источник, гиды, плеер и избранное.
+     *
+     * После импорта каталог перечитывается тем же путём, что и при обычном подключении:
+     * так пользователь попадает на главный экран уже с каналами.
+     *
+     * @param uri адрес выбранного файла настроек.
+     */
+    fun restore(uri: Uri) {
+        viewModelScope.launch {
+            _state.value = OnboardingUiState.Loading
+
+            // Ошибка чтения файла, разбора и сети — текст на экране, а не падение.
+            runCatching {
+                val text = context.contentResolver.openInputStream(uri)
+                    ?.bufferedReader()
+                    ?.use { it.readText() }
+                    ?: error("не удалось открыть файл")
+
+                when (val imported = backupService.importJson(text)) {
+                    is SettingsImportResult.Failure -> {
+                        _state.value = OnboardingUiState.Error(imported.reason)
+                    }
+
+                    SettingsImportResult.Success -> {
+                        val source = sourceRepository.active()
+                        if (source == null) {
+                            _state.value = OnboardingUiState.Error("В файле нет источника каналов")
+                            return@runCatching
+                        }
+                        when (val updated = updater.updateCatalogOnly(source)) {
+                            is CatalogUpdateResult.Success -> {
+                                _state.value = OnboardingUiState.Success
+                                epgUpdater.update(updated.epgUrl)
+                            }
+
+                            is CatalogUpdateResult.Failure -> {
+                                _state.value = OnboardingUiState.Error(updated.reason)
+                            }
+                        }
+                    }
+                }
+            }.onFailure { error ->
+                _state.value = OnboardingUiState.Error(
+                    "Не удалось восстановить настройки: ${error.message ?: "неизвестная ошибка"}",
+                )
+            }
+        }
     }
 
     private fun validate(source: PlaylistSource): String? =

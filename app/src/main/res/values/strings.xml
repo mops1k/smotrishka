@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">Смотришка ТВ</string>
     <string name="brand_name">SmotrishkaTV</string>
+    <string name="about_description">Домашний IPTV-клиент для Android TV и телефона: каналы, программа передач и архив.</string>
 </resources>

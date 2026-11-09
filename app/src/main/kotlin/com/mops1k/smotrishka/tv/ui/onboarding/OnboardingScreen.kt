@@ -135,6 +135,11 @@ fun OnboardingScreen(
         }
     }
 
+    // Файл настроек: после переустановки источник, гиды и избранное возвращаются разом.
+    val pickSettings = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) viewModel.restore(uri)
+    }
+
     LaunchedEffect(initial) {
         when (val source = initial) {
             is PlaylistSource.M3uUrl -> {
@@ -346,6 +351,13 @@ fun OnboardingScreen(
                             },
                             style = TvType.caption,
                             color = TvColors.muted,
+                        )
+
+                        Spacer(Modifier.height(12.dp))
+                        SecondaryButton(
+                            text = "Восстановить настройки из файла",
+                            enabled = state !is OnboardingUiState.Loading,
+                            onClick = { pickSettings.launch(arrayOf("*/*")) },
                         )
 
                         if (onCancel != null) {

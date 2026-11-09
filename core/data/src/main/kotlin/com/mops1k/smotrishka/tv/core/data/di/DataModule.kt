@@ -23,6 +23,7 @@ import com.mops1k.smotrishka.tv.core.data.EpgGuideValidator
 import com.mops1k.smotrishka.tv.core.data.EpgLoader
 import com.mops1k.smotrishka.tv.core.data.EpgMapper
 import com.mops1k.smotrishka.tv.core.data.EpgStore
+import com.mops1k.smotrishka.tv.core.data.FavoritesStore
 import com.mops1k.smotrishka.tv.core.data.HttpBytesClient
 import com.mops1k.smotrishka.tv.core.data.HttpTextClient
 import com.mops1k.smotrishka.tv.core.data.IedemPlaylistLoader
@@ -37,6 +38,11 @@ import com.mops1k.smotrishka.tv.core.data.SmotrishkaDatabase
 import com.mops1k.smotrishka.tv.core.data.SourceRepository
 import com.mops1k.smotrishka.tv.core.data.SyncStatusStore
 import com.mops1k.smotrishka.tv.core.data.UpdateScheduler
+import com.mops1k.smotrishka.tv.core.data.backup.SettingsBackupService
+import com.mops1k.smotrishka.tv.core.data.update.ApkDownloader
+import com.mops1k.smotrishka.tv.core.data.update.GithubReleasesClient
+import com.mops1k.smotrishka.tv.core.data.update.UpdateChecker
+import com.mops1k.smotrishka.tv.core.data.update.UpdateSettingsStore
 import com.mops1k.smotrishka.tv.core.data.watchnext.TvProviderWatchNextSync
 import com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextSync
 import com.mops1k.smotrishka.tv.core.playlist.M3uParser
@@ -163,6 +169,40 @@ object DataModule {
     @Singleton
     fun playerSettingsStore(preferences: DataStore<Preferences>): PlayerSettingsStore =
         PlayerSettingsStore(preferences)
+
+    @Provides
+    @Singleton
+    fun updateSettingsStore(preferences: DataStore<Preferences>): UpdateSettingsStore =
+        UpdateSettingsStore(preferences)
+
+    @Provides
+    @Singleton
+    fun githubReleasesClient(httpTextClient: HttpTextClient): GithubReleasesClient =
+        GithubReleasesClient(httpTextClient)
+
+    @Provides
+    @Singleton
+    fun updateChecker(client: GithubReleasesClient): UpdateChecker = UpdateChecker(client)
+
+    @Provides
+    @Singleton
+    fun apkDownloader(okHttpClient: OkHttpClient): ApkDownloader = ApkDownloader(okHttpClient)
+
+    @Provides
+    @Singleton
+    fun settingsBackupService(
+        sourceRepository: SourceRepository,
+        playerSettingsStore: PlayerSettingsStore,
+        epgGuideRepository: EpgGuideRepository,
+        favoritesStore: FavoritesStore,
+        updateSettingsStore: UpdateSettingsStore,
+    ): SettingsBackupService = SettingsBackupService(
+        sourceRepository = sourceRepository,
+        playerSettingsStore = playerSettingsStore,
+        epgGuideRepository = epgGuideRepository,
+        favoritesStore = favoritesStore,
+        updateSettingsStore = updateSettingsStore,
+    )
 
     @Provides
     @Singleton

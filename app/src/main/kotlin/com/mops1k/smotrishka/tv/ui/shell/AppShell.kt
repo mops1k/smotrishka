@@ -78,6 +78,7 @@ fun AppShell(
                     narrow = narrow,
                     focusEnabled = sidebarFocused,
                     menuFocusRequester = menuFocusRequester,
+                    updateAvailable = LocalUpdateBadge.current,
                 )
                 Column(
                     modifier = Modifier

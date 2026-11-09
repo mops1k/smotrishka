@@ -86,12 +86,14 @@ import androidx.compose.foundation.layout.width
  * «параметр — значение — действие — подсказка» и группы вариантов.
  *
  * @param onChangeSource переход к смене источника;
+ * @param onOpenAbout переход в «О приложении»;
  * @param onBack возврат на главный экран;
  * @param viewModel экранная модель.
  */
 @Composable
 fun SettingsScreen(
     onChangeSource: () -> Unit,
+    onOpenAbout: () -> Unit = {},
     onBack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
@@ -101,7 +103,7 @@ fun SettingsScreen(
     val updating by viewModel.updating.collectAsStateWithLifecycle()
     val fileSource by viewModel.fileSource.collectAsStateWithLifecycle()
     val quality by viewModel.videoQuality.collectAsStateWithLifecycle()
-    val retryAttempts by viewModel.retryAttempts.collectAsStateWithLifecycle()
+    val recoveryDelaySeconds by viewModel.recoveryDelaySeconds.collectAsStateWithLifecycle()
     val epgWindowHours by viewModel.epgWindowHours.collectAsStateWithLifecycle()
     val dataSaver by viewModel.dataSaver.collectAsStateWithLifecycle()
     val audioLanguage by viewModel.audioLanguage.collectAsStateWithLifecycle()
@@ -153,8 +155,11 @@ fun SettingsScreen(
     AppShell(
         destination = ShellDestination.SETTINGS,
         onSelect = { destination ->
-            if (destination == ShellDestination.SETTINGS) return@AppShell
-            onBack()
+            when (destination) {
+                ShellDestination.SETTINGS -> Unit
+                ShellDestination.ABOUT -> onOpenAbout()
+                else -> onBack()
+            }
         },
         onSearch = null,
     ) {
@@ -186,12 +191,12 @@ fun SettingsScreen(
                         PlaybackCard(
                             bufferSeconds = bufferSeconds,
                             quality = quality,
-                            retryAttempts = retryAttempts,
+                            recoveryDelaySeconds = recoveryDelaySeconds,
                             audioLanguage = audioLanguage,
                             dataSaver = dataSaver,
                             onBuffer = viewModel::setBufferSeconds,
                             onQuality = viewModel::setVideoQuality,
-                            onRetry = viewModel::setRetryAttempts,
+                            onRecoveryDelay = viewModel::setRecoveryDelaySeconds,
                             onLanguage = viewModel::setAudioLanguage,
                             onDataSaver = viewModel::setDataSaver,
                             modifier = Modifier.weight(1f),
@@ -328,18 +333,19 @@ private fun SourceCard(
 }
 
 /**
- * Карточка «Воспроизведение»: буфер, качество, повторы, язык звука и экономия трафика.
+ * Карточка «Воспроизведение»: буфер, качество, пауза между попытками восстановления,
+ * язык звука и экономия трафика.
  */
 @Composable
 private fun PlaybackCard(
     bufferSeconds: Int,
     quality: VideoQuality,
-    retryAttempts: Int,
+    recoveryDelaySeconds: Int,
     audioLanguage: AudioLanguage,
     dataSaver: Boolean,
     onBuffer: (Int) -> Unit,
     onQuality: (VideoQuality) -> Unit,
-    onRetry: (Int) -> Unit,
+    onRecoveryDelay: (Int) -> Unit,
     onLanguage: (AudioLanguage) -> Unit,
     onDataSaver: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
@@ -375,14 +381,16 @@ private fun PlaybackCard(
         )
 
         SettingsRow(
-            title = "Повторы при обрыве",
-            value = "$retryAttempts",
-            hint = "Сколько раз пробовать заново, прежде чем показать ошибку",
+            title = "Пауза между попытками",
+            value = "$recoveryDelaySeconds с",
+            hint = "Плеер пробует восстановить поток бесконечно: чаще этого не получится",
         )
         ChoiceGroup(
-            options = PlayerSettingsStore.RETRY_CHOICES.map { "$it" to (it == retryAttempts) },
-            columns = PlayerSettingsStore.RETRY_CHOICES.size,
-            onPick = { index -> onRetry(PlayerSettingsStore.RETRY_CHOICES[index]) },
+            options = PlayerSettingsStore.RECOVERY_DELAY_CHOICES.map {
+                "$it с" to (it == recoveryDelaySeconds)
+            },
+            columns = PlayerSettingsStore.RECOVERY_DELAY_CHOICES.size,
+            onPick = { index -> onRecoveryDelay(PlayerSettingsStore.RECOVERY_DELAY_CHOICES[index]) },
         )
 
         SettingsRow(

@@ -65,6 +65,7 @@ import java.time.ZoneId
  * @param onChannelOpen открыть канал в плеере;
  * @param onOpenArchive открыть прошедшую передачу в архиве;
  * @param onOpenSettings открыть настройки;
+ * @param onOpenAbout открыть «О приложении»;
  * @param viewModel экранная модель.
  */
 @Composable
@@ -72,6 +73,7 @@ fun HomeScreen(
     onChannelOpen: (ChannelId) -> Unit = {},
     onOpenArchive: (ChannelId, Instant) -> Unit = { _, _ -> },
     onOpenSettings: () -> Unit = {},
+    onOpenAbout: () -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -215,10 +217,10 @@ fun HomeScreen(
         menuFocusRequester = focusTargets.menu,
         destination = content?.section?.toDestination() ?: ShellDestination.TV,
         onSelect = { destination ->
-            if (destination == ShellDestination.SETTINGS) {
-                onOpenSettings()
-            } else {
-                viewModel.selectSection(destination.toSection())
+            when (destination) {
+                ShellDestination.SETTINGS -> onOpenSettings()
+                ShellDestination.ABOUT -> onOpenAbout()
+                else -> viewModel.selectSection(destination.toSection())
             }
         },
         onSearch = { searchOpen = true },

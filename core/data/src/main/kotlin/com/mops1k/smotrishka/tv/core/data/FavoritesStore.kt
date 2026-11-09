@@ -41,6 +41,15 @@ class FavoritesStore @Inject constructor(
         return added
     }
 
+    /**
+     * Заменяет избранное целиком — так его восстанавливают из файла настроек.
+     *
+     * @param channelIds новый набор избранных каналов.
+     */
+    suspend fun setChannels(channelIds: Set<String>) {
+        dataStore.edit { preferences -> preferences[KEY] = channelIds }
+    }
+
     private companion object {
         val KEY = stringSetPreferencesKey("favorites")
     }

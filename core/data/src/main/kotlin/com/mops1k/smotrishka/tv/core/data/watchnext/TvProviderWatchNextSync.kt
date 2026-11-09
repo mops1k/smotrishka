@@ -33,15 +33,19 @@ class TvProviderWatchNextSync(
                 clearChannel()
                 return@withContext
             }
-            val channelId = runCatching { ensureChannel() }
+            val channelId = runCatching { ensureChannel(cards.first().deepLink) }
                 .onFailure { Log.w(TAG, "не удалось получить канал ленты", it) }
                 .getOrNull()
                 ?: return@withContext
             Log.d(TAG, "публикуем ${cards.size} карточек в канал $channelId")
             deletePrograms(channelId)
             cards.forEachIndexed { index, card ->
+                // Лаунчер сортирует по весу по убыванию, поэтому первому каналу отдаём
+                // самый большой вес: иначе строка показывается справа налево.
+                val weight = cards.size - 1 - index
+                Log.d(TAG, "карточка ${index + 1}/${cards.size}: «${card.title}» weight=$weight")
                 runCatching {
-                    helper.publishPreviewProgram(program(channelId, index, card))
+                    helper.publishPreviewProgram(program(channelId, weight, card))
                 }.onFailure { error ->
                     Log.w(TAG, "карточка «${card.title}» не опубликована", error)
                 }
@@ -54,8 +58,13 @@ class TvProviderWatchNextSync(
         withContext(Dispatchers.IO) { clearChannel() }
     }
 
-    /** Канал ленты: существующий или только что созданный. */
-    private fun ensureChannel(): Long {
+    /**
+     * Канал ленты: существующий или только что созданный.
+     *
+     * @param appLink ссылка, которую лаунчер откроет по нажатию на заголовок канала
+     * (androidx.tvprovider без неё отказывается собирать канал).
+     */
+    private fun ensureChannel(appLink: String): Long {
         helper.allChannels.firstOrNull { it.displayName?.toString() == CHANNEL_NAME }?.let {
             Log.d(TAG, "канал ленты уже есть: ${it.id}")
             return it.id
@@ -63,6 +72,9 @@ class TvProviderWatchNextSync(
         val channel = PreviewChannel.Builder()
             .setDisplayName(CHANNEL_NAME)
             .setDescription(CHANNEL_DESCRIPTION)
+            .setAppLinkIntentUri(Uri.parse(appLink))
+            // Провайдер не создаёт канал без логотипа: берём иконку приложения из ресурсов.
+            .setLogo(Uri.parse("android.resource://${context.packageName}/$BRAND_LOGO"))
             .build()
         val id = helper.publishDefaultChannel(channel)
         // Провайдер может вернуть пустой канал, если система запретила публикацию:
@@ -111,6 +123,8 @@ class TvProviderWatchNextSync(
             .setLive(true)
             .setWeight(weight)
             .setIntentUri(Uri.parse(card.deepLink))
+        // Постер обязан быть внешним URI: TvProvider не копирует байты картинки
+        // (в 1.1.0 такого API нет), а лаунчер не читает файлы приложения. Поэтому — логотип канала.
         card.logoUrl?.takeIf { it.isNotBlank() }?.let { logo ->
             builder.setPosterArtUri(Uri.parse(logo))
         }
@@ -121,5 +135,8 @@ class TvProviderWatchNextSync(
         const val TAG = "SmotrishkaWatchNext"
         const val CHANNEL_NAME = "Сейчас идёт"
         const val CHANNEL_DESCRIPTION = "Каналы SmotrishkaTV с текущей передачей"
+
+        /** Логотип канала ленты в ресурсах приложения. */
+        const val BRAND_LOGO = "drawable/brand_mark"
     }
 }

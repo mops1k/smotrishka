@@ -5,6 +5,8 @@
     <!-- Каталог, EPG и потоки берутся из сети. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Обновление ставится из самого приложения: релизный APK с GitHub. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Один APK на Android TV и на телефоны/планшеты: leanback и тач не обязательны. -->
     <uses-feature
@@ -47,6 +49,11 @@
                     android:scheme="smotrishka" />
             </intent-filter>
         </activity>
+
+        <!-- Результат установки обновления: только журнал и сообщение о неудаче. -->
+        <receiver
+            android:name=".update.InstallStatusReceiver"
+            android:exported="false" />
 
         <!-- WorkManager инициализируется Hilt-фабрикой воркеров в Application,
              поэтому стандартный инициализатор отключается. -->

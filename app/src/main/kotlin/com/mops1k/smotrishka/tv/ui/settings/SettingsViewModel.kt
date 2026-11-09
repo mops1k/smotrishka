@@ -103,11 +103,11 @@ class SettingsViewModel @Inject constructor(
         initialValue = VideoQuality.AUTO,
     )
 
-    /** Сколько раз плеер повторяет загрузку после обрыва. */
-    val retryAttempts: StateFlow<Int> = playerSettingsStore.retryAttempts.stateIn(
+    /** Потолок паузы между попытками восстановления потока, секунды. */
+    val recoveryDelaySeconds: StateFlow<Int> = playerSettingsStore.recoveryDelaySeconds.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
-        initialValue = PlayerSettingsStore.DEFAULT_RETRY_ATTEMPTS,
+        initialValue = PlayerSettingsStore.DEFAULT_RECOVERY_DELAY_SECONDS,
     )
 
     /** Окно программы передач: сколько часов назад хранить. */
@@ -339,12 +339,12 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
-     * Меняет число повторов после обрыва.
+     * Меняет потолок паузы между попытками восстановления потока.
      *
-     * @param attempts значение из [PlayerSettingsStore.RETRY_CHOICES].
+     * @param seconds значение из [PlayerSettingsStore.RECOVERY_DELAY_CHOICES].
      */
-    fun setRetryAttempts(attempts: Int) {
-        viewModelScope.launch { playerSettingsStore.setRetryAttempts(attempts) }
+    fun setRecoveryDelaySeconds(seconds: Int) {
+        viewModelScope.launch { playerSettingsStore.setRecoveryDelaySeconds(seconds) }
     }
 
     /**

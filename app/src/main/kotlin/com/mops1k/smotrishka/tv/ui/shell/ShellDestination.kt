@@ -1,6 +1,7 @@
 package com.mops1k.smotrishka.tv.ui.shell
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -29,4 +30,7 @@ enum class ShellDestination(val title: String, val icon: ImageVector) {
 
     /** Настройки: отдельный маршрут. */
     SETTINGS("Настройки", Icons.Filled.Settings),
+
+    /** О приложении: назначение, версия и обновление. */
+    ABOUT("О приложении", Icons.Filled.Info),
 }

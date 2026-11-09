@@ -167,6 +167,23 @@ class WatchNextCardsBuilderTest {
     }
 
     @Test
+    fun `каналы без логотипа в ленту не попадают`() {
+        val cards = builder.build(
+            favourites = listOf("no-logo", "with-logo"),
+            recent = emptyList(),
+            lastCategoryId = null,
+            channels = listOf(
+                WatchNextSource(channel("no-logo", "Без логотипа", logo = null), nowTitle = "Новости"),
+                WatchNextSource(channel("blank-logo", "Пустой логотип", logo = " "), nowTitle = "Новости"),
+                WatchNextSource(channel("with-logo", "С логотипом"), nowTitle = "Новости"),
+            ),
+        )
+
+        // Лаунчер не умеет рисовать постер сам: карточка без логотипа выглядит пустой плиткой.
+        assertThat(cards.map { it.channelId }).containsExactly("with-logo")
+    }
+
+    @Test
     fun `ссылка карточки открывает именно этот канал`() {
         val id = "http://provider.example/channel.m3u8?a=1&b=2"
         val cards = builder.build(

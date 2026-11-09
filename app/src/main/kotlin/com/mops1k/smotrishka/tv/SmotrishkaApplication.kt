@@ -43,6 +43,9 @@ class SmotrishkaApplication : Application(), Configuration.Provider {
     @Inject
     lateinit var guideRefreshPlanner: GuideRefreshPlanner
 
+    @Inject
+    lateinit var updateRepository: com.mops1k.smotrishka.tv.update.UpdateRepository
+
     // В WorkManager 2.12 Configuration.Provider объявлен функцией, а не property.
     override fun getWorkManagerConfiguration(): Configuration =
         Configuration.Builder()
@@ -81,5 +84,9 @@ class SmotrishkaApplication : Application(), Configuration.Provider {
             runCatching { archiveProbe.runIfStale() }
                 .onFailure { android.util.Log.e("SmotrishkaSync", "archive probe failed", it) }
         }
+        // Проверка обновлений приложения: раз в сутки и только по Wi-Fi, если так настроено.
+        // Сбои здесь не должны мешать старту — внутри всё в runCatching.
+        runCatching { updateRepository.checkOnStartup() }
+            .onFailure { android.util.Log.e("SmotrishkaUpdate", "startup update check failed", it) }
     }
 }

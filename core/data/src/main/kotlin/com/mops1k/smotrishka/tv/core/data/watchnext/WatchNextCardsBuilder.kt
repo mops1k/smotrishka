@@ -13,7 +13,8 @@ import kotlin.random.Random
  *
  * Канал показывается один раз, даже если попал в несколько источников: карточка избранного
  * не дублируется карточкой из «недавних». Каналы без текущей передачи в ленту не попадают —
- * карточка должна отвечать на вопрос «что идёт».
+ * карточка должна отвечать на вопрос «что идёт». Каналы без логотипа тоже не попадают:
+ * TvProvider не копирует картинку, и карточка в лаунчере выглядела бы пустой плиткой.
  *
  * @param random источник случайности: в приложении [Random.Default], в тестах — с фиксированным seed.
  */
@@ -37,7 +38,9 @@ class WatchNextCardsBuilder(private val random: Random = Random.Default) {
         limit: Int = DEFAULT_LIMIT,
     ): List<WatchNextCard> {
         val max = limit.coerceIn(1, MAX_LIMIT)
-        val withProgramme = channels.filter { it.nowTitle?.isNotBlank() == true }
+        val withProgramme = channels.filter { source ->
+            source.nowTitle?.isNotBlank() == true && !source.channel.logoUrl.isNullOrBlank()
+        }
         val byId = withProgramme.associateBy { it.channel.id.value }
         val ordered = LinkedHashMap<String, WatchNextSource>(max * 2)
 

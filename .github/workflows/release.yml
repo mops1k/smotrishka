@@ -149,11 +149,25 @@ jobs:
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
           set -euo pipefail
-          args=(--title "Смотришка ТВ $VERSION" --generate-notes)
-          if [ "$PRERELEASE" = "true" ]; then
-            args+=(--prerelease)
+          assets=(
+            "dist/smotrishka_${VERSION}.release.apk"
+            "dist/smotrishka_${VERSION}.debug.apk"
+          )
+          # Релиз для тега мог быть создан до прогона (руками или в прошлом ретрае):
+          # gh release create в этом случае падает, и оба APK не публикуются.
+          # Поэтому существующий релиз не пересоздаём, а перезаписываем ассеты.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Релиз $TAG уже существует — перезаписываю ассеты"
+            gh release upload "$TAG" "${assets[@]}" --clobber
+            if [ "$PRERELEASE" = "true" ]; then
+              gh release edit "$TAG" --prerelease
+            else
+              gh release edit "$TAG" --prerelease=false
+            fi
+          else
+            args=(--title "Смотришка ТВ $VERSION" --generate-notes)
+            if [ "$PRERELEASE" = "true" ]; then
+              args+=(--prerelease)
+            fi
+            gh release create "$TAG" "${assets[@]}" "${args[@]}"
           fi
-          gh release create "$TAG" \
-            "dist/smotrishka_${VERSION}.release.apk" \
-            "dist/smotrishka_${VERSION}.debug.apk" \
-            "${args[@]}"

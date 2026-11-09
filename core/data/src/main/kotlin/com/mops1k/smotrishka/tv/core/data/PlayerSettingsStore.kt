@@ -76,9 +76,14 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
             ?: VideoQuality.AUTO
     }
 
-    /** Сколько раз повторять загрузку после обрыва. */
-    val retryAttempts: Flow<Int> = dataStore.data.map { preferences ->
-        preferences[RETRY_KEY] ?: DEFAULT_RETRY_ATTEMPTS
+    /**
+     * Потолок паузы между попытками восстановления потока, секунды.
+     *
+     * Плеер не сдаётся и повторяет попытки бесконечно; значение из [RECOVERY_DELAY_CHOICES]
+     * задаёт, как часто это происходит в худшем случае, чтобы не забивать канал.
+     */
+    val recoveryDelaySeconds: Flow<Int> = dataStore.data.map { preferences ->
+        preferences[RECOVERY_DELAY_KEY] ?: DEFAULT_RECOVERY_DELAY_SECONDS
     }
 
     /** Окно программы передач в часах (назад), вперёд — вдвое больше. */
@@ -230,12 +235,17 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
     }
 
     /**
-     * Сохраняет число повторов.
+     * Сохраняет потолок паузы между попытками восстановления потока.
      *
-     * @param attempts значение из [RETRY_CHOICES].
+     * @param seconds значение из [RECOVERY_DELAY_CHOICES] (иначе приводится к краям списка).
      */
-    suspend fun setRetryAttempts(attempts: Int) {
-        dataStore.edit { preferences -> preferences[RETRY_KEY] = attempts.coerceIn(1, MAX_RETRY_ATTEMPTS) }
+    suspend fun setRecoveryDelaySeconds(seconds: Int) {
+        dataStore.edit { preferences ->
+            preferences[RECOVERY_DELAY_KEY] = seconds.coerceIn(
+                RECOVERY_DELAY_CHOICES.first(),
+                RECOVERY_DELAY_CHOICES.last(),
+            )
+        }
     }
 
     /**
@@ -357,12 +367,11 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
         const val MIN_BUFFER_SECONDS = 1
         const val MAX_BUFFER_SECONDS = 60
 
-        const val DEFAULT_RETRY_ATTEMPTS = 5
+        /** Потолок паузы между попытками восстановления по умолчанию: раз в 10 секунд. */
+        const val DEFAULT_RECOVERY_DELAY_SECONDS = 10
 
-        /** Варианты числа повторов. */
-        val RETRY_CHOICES = listOf(3, 5, 8)
-
-        const val MAX_RETRY_ATTEMPTS = 10
+        /** Варианты потолка паузы между попытками восстановления, секунды. */
+        val RECOVERY_DELAY_CHOICES = listOf(5, 10, 15)
 
         const val DEFAULT_EPG_WINDOW_HOURS = 24
 
@@ -402,7 +411,7 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
         private val OSD_HIDE_KEY = intPreferencesKey("player_osd_hide_seconds")
         private val EPG_SHIFTS_KEY = stringSetPreferencesKey("epg_shifts_by_channel")
         private val QUALITY_KEY = stringPreferencesKey("player_video_quality")
-        private val RETRY_KEY = intPreferencesKey("player_retry_attempts")
+        private val RECOVERY_DELAY_KEY = intPreferencesKey("player_recovery_max_delay_seconds")
         private val EPG_WINDOW_KEY = intPreferencesKey("epg_window_hours")
         private val DATA_SAVER_KEY = booleanPreferencesKey("data_saver")
         private val WATCH_NEXT_ENABLED_KEY = booleanPreferencesKey("watch_next_enabled")

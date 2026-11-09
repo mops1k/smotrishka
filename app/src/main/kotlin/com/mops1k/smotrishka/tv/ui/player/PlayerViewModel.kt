@@ -332,11 +332,11 @@ class PlayerViewModel @Inject constructor(
         initialValue = VideoQuality.AUTO,
     )
 
-    /** Сколько раз пытаться восстановить поток. */
-    val retryAttempts: StateFlow<Int> = settingsStore.retryAttempts.stateIn(
+    /** Потолок паузы между попытками восстановления потока, секунды. */
+    val recoveryDelaySeconds: StateFlow<Int> = settingsStore.recoveryDelaySeconds.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
-        initialValue = PlayerSettingsStore.DEFAULT_RETRY_ATTEMPTS,
+        initialValue = PlayerSettingsStore.DEFAULT_RECOVERY_DELAY_SECONDS,
     )
 
     /** Предпочитаемый язык звука. */

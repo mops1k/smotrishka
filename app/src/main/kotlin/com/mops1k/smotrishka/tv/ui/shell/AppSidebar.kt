@@ -1,6 +1,7 @@
 package com.mops1k.smotrishka.tv.ui.shell
 
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,8 +40,10 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.mops1k.smotrishka.tv.R
 import com.mops1k.smotrishka.tv.core.designsystem.component.LocalReduceMotion
 import com.mops1k.smotrishka.tv.core.designsystem.component.tvFocusRing
 import com.mops1k.smotrishka.tv.core.designsystem.theme.TvColors
@@ -71,6 +74,8 @@ fun AppSidebar(
     focusEnabled: Boolean = true,
     // Адрес фокуса текущего пункта: по нему в меню попадает «влево» с края контента.
     menuFocusRequester: FocusRequester? = null,
+    // Доступно обновление: на пункте «О приложении» появляется точка акцента.
+    updateAvailable: Boolean = false,
 ) {
     // Фокус внутри меню (на нём самом или на пункте) — разворачиваем, иначе сворачиваем.
     var focusedInside by remember { mutableStateOf(false) }
@@ -123,6 +128,7 @@ fun AppSidebar(
                     narrow = collapsed,
                     focusEnabled = focusEnabled,
                     focusRequester = if (destination == current) currentRequester else null,
+                    badge = updateAvailable && destination == ShellDestination.ABOUT,
                     onClick = { onSelect(destination) },
                 )
             }
@@ -146,20 +152,13 @@ private fun BrandButton(narrow: Boolean) {
             .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
+        Image(
+            painter = painterResource(R.drawable.brand_mark),
+            contentDescription = null,
             modifier = Modifier
                 .size(TvDimens.brandMark)
-                .rotate(-8f)
-                .border(2.dp, TvColors.accent, RoundedCornerShape(10.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(9.dp)
-                    .clip(CircleShape)
-                    .background(TvColors.accent),
-            )
-        }
+                .clip(RoundedCornerShape(9.dp)),
+        )
         if (!narrow) {
             Spacer(Modifier.width(11.dp))
             Text(text = "Смотришка", style = TvType.brand, color = TvColors.text)
@@ -184,6 +183,8 @@ private fun MenuItem(
     // Фокус пункта разрешён только когда меню активировано кнопкой «влево».
     focusEnabled: Boolean = true,
     focusRequester: FocusRequester? = null,
+    // Есть обновление: точка акцента на иконке.
+    badge: Boolean = false,
 ) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(TvRadius.item)
@@ -236,22 +237,24 @@ private fun MenuItem(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = if (narrow) Arrangement.Center else Arrangement.Start,
     ) {
-        if (narrow) {
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = destination.icon,
-                    contentDescription = destination.title,
-                    tint = if (active) TvColors.menuIconActive else textColor,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-        } else {
+        Box {
             Icon(
                 imageVector = destination.icon,
-                contentDescription = null,
+                contentDescription = if (narrow) destination.title else null,
                 tint = if (active) TvColors.menuIconActive else textColor,
                 modifier = Modifier.size(22.dp),
             )
+            if (badge) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(TvColors.accent),
+                )
+            }
+        }
+        if (!narrow) {
             Spacer(Modifier.width(14.dp))
             Text(
                 text = destination.title,
