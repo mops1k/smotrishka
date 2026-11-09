@@ -1027,9 +1027,9 @@ class HomeViewModel @Inject constructor(
         }).filter { category ->
             category.id == null || allChannels.any { it.channel.categoryId == category.id }
         }
-        // Видео в карточке привязано к каналу, подтверждённому OK; при первом построении
-        // подтверждаем текущий выбранный, чтобы превью не оставалось пустым.
-        if (confirmedVideoChannelId == null) confirmedVideoChannelId = selectedChannelId
+        // Живое превью включается только для канала, который пользователь уже открыл:
+        // канал из истории ставит followLastWatched, явный выбор — confirmPreview.
+        // Автоподтверждение первого канала запускало кадр на холодном старте (баг 09.11.2026).
         // Карточка не зависит от раздела: канал остаётся выбранным, даже если его нет в списке.
         val previewChannel = channels.firstOrNull { it.channel.id == selectedChannelId }
         val schedule = if (programmeOpen && previewChannel != null) {

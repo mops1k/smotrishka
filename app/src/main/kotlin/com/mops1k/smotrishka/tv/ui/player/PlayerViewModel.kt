@@ -330,11 +330,15 @@ class PlayerViewModel @Inject constructor(
         }.getOrNull()
         val at = clock.instant().minusSeconds(shiftSeconds)
         val current = programmes.firstOrNull { !it.start.isAfter(at) && it.end.isAfter(at) }
+        val head = programmes.take(3).joinToString(" | ") { "${it.title} ${it.start}..${it.end}" }
+        val tail = programmes.takeLast(3).joinToString(" | ") { "${it.title} ${it.start}..${it.end}" }
         android.util.Log.d(
             "SmotrishkaGuide",
             "канал='${channel.name}' epgId=$epgId гид='${epgName.orEmpty()}' " +
+                "всего=${programmes.size} сдвиг=$shiftSeconds " +
                 "текущая='${current?.title.orEmpty()}' " +
-                "начало=${current?.start} конец=${current?.end} сейчас=${clock.instant()}",
+                "начало=${current?.start} конец=${current?.end} сейчас=${clock.instant()} " +
+                "первые=[$head] последние=[$tail]",
         )
     }
 

@@ -34,7 +34,6 @@ import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -368,19 +367,16 @@ class HomeViewModelTest {
         // до сохранения и тест падает в CI (09.11.2026).
         awaitRecents("one", "two")
         val model = viewModel()
-        model.state.first { it is HomeUiState.Content }
+        // Подписка на историю асинхронная: дожидаемся, пока модель прочитает оба канала,
+        // иначе раздел «Недавние» соберётся пустым (флейк 09.11.2026).
+        model.state.first { it is HomeUiState.Content && it.recent.size == 2 }
 
         model.selectSection(HomeSection.RECENT)
 
-        // «Недавние» публикуются несколькими проходами: запись истории идёт на IO, и первый
-        // проход с этим разделом может прийти до того, как модель прочитала оба канала.
-        // Ждём состояние с обоими — иначе тест падал вразнобой (09.11.2026).
-        val content = withTimeout(5_000) {
-            model.state.first {
-                it is HomeUiState.Content &&
-                    it.section == HomeSection.RECENT &&
-                    it.channels.size == 2
-            }
+        val content = model.state.first {
+            it is HomeUiState.Content &&
+                it.section == HomeSection.RECENT &&
+                it.channels.size == 2
         } as HomeUiState.Content
         assertThat(content.channels.map { it.channel.name })
             .containsExactly("Первый", "Киноканал")
@@ -667,6 +663,70 @@ class HomeViewModelTest {
                 },
             ),
         )
+    }
+
+    @Test
+    fun `открытие категории не запускает живое превью без истории`() = runTest {
+        playlist()
+        // Передача уже закончилась: экран пересобирается сам по тику, как на устройстве.
+        epgStore.replace(
+            Epg(
+                channels = listOf(EpgChannel("one", "Первый")),
+                programmes = listOf(
+                    Programme(
+                        channelId = "one",
+                        title = "Новости",
+                        start = now.minusSeconds(7200),
+                        end = now.minusSeconds(60),
+                    ),
+                ),
+            ),
+        )
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content }
+
+        model.selectCategory("основные")
+        advanceUntilIdle()
+        val opened = model.state.first() as HomeUiState.Content
+        assertThat(opened.selectedChannelId).isEqualTo(ChannelId("one"))
+
+        // Пересборка экрана: превью не подтверждается само, пока канал не открыли.
+        model.tick()
+        advanceUntilIdle()
+
+        val after = model.state.first() as HomeUiState.Content
+        assertThat(after.previewChannel).isNotNull()
+        assertThat(after.previewVideoChannelId).isNull()
+        assertThat(after.previewVideoChannel).isNull()
+    }
+
+    @Test
+    fun `превью открывается на последнем открытом канале из истории`() = runTest {
+        playlist()
+        recentChannels.remember("two")
+        awaitRecents("two")
+        val model = viewModel()
+
+        // Ждём состояние, в котором превью уже переведено на канал из истории.
+        val content = model.state.first {
+            it is HomeUiState.Content && it.previewVideoChannelId?.value == "two"
+        } as HomeUiState.Content
+
+        assertThat(content.previewVideoChannel?.channel?.name).isEqualTo("Киноканал")
+    }
+
+    @Test
+    fun `фокус на канале не запускает превью до нажатия OK`() = runTest {
+        playlist()
+        val model = viewModel()
+        model.state.first { it is HomeUiState.Content }
+
+        model.selectChannel(ChannelId("two"))
+        advanceUntilIdle()
+
+        val after = model.state.first() as HomeUiState.Content
+        assertThat(after.selectedChannelId).isEqualTo(ChannelId("two"))
+        assertThat(after.previewVideoChannelId).isNull()
     }
 
     private companion object {
