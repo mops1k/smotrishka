@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.net.URI
@@ -258,11 +259,15 @@ class SettingsViewModel @Inject constructor(
             languagesState.value = values.distinct().sorted()
         }
         // Сообщения фонового импортёра показываем в строке состояния настроек.
-        viewModelScope.launch {
-            playlistImporter.status.collect { message ->
-                if (message != null) _status.value = message
-            }
-        }
+        // Подписка живёт только пока экран подписан на status: бесконечный collect в init
+        // не давал тестам завершиться (UncompletedCoroutinesError в CI 09.11.2026).
+        playlistImporter.status
+            .onEach { message -> if (message != null) _status.value = message }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+                initialValue = null,
+            )
         refresh()
         refreshGuides()
         // Статус прошлого обновления не должен затирать свежий: чтение DataStore в init

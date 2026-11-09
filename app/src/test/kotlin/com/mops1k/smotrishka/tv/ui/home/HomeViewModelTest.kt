@@ -363,6 +363,9 @@ class HomeViewModelTest {
         playlist()
         recentChannels.remember("two")
         recentChannels.remember("one")
+        // Запись в DataStore идёт на реальном IO: дожидаемся её, иначе порядок читается
+        // до сохранения и тест падает в CI (09.11.2026).
+        awaitRecents("one", "two")
         val model = viewModel()
         model.state.first { it is HomeUiState.Content }
 
@@ -628,6 +631,17 @@ class HomeViewModelTest {
             withContext(Dispatchers.Default) { delay(AWAIT_REAL_MS) }
         }
         throw AssertionError("лента не убрана из лаунчера")
+    }
+
+    /** Дожидается, что недавние каналы сохранены в DataStore в указанном порядке. */
+    private suspend fun awaitRecents(vararg expectedIds: String) {
+        val deadline = System.currentTimeMillis() + AWAIT_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            val stored = runCatching { recentChannels.channels.first() }.getOrDefault(emptyList())
+            if (stored == expectedIds.toList()) return
+            withContext(Dispatchers.Default) { delay(AWAIT_REAL_MS) }
+        }
+        throw AssertionError("недавние не сохранились: ожидалось ${expectedIds.toList()}")
     }
 
     /** Гид с текущими передачами: по передаче на каждый канал. */
