@@ -19,6 +19,7 @@ import com.mops1k.smotrishka.tv.core.model.Channel
 import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.core.model.Programme
 import com.mops1k.smotrishka.tv.core.playlist.EpgMatcher
+import com.mops1k.smotrishka.tv.core.playlist.EpgResolver
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -187,17 +188,17 @@ class PlayerViewModel @Inject constructor(
     private suspend fun nowProgrammes(channels: List<Channel>): Map<String, NowProgramme> {
         if (channels.isEmpty()) return emptyMap()
         val now = clock.instant()
-        // Сохранённые связи каналов с гидом: сопоставление по названиям (чтение всей
-        // таблицы гида) выполняем только если связей ещё нет.
-        val saved = runCatching { channelEpgStore.links() }.getOrDefault(emptyMap())
-        val matches = if (saved.isNotEmpty()) {
-            // Если для канала связи нет, берём epgId из самого каталога.
-            channels.mapNotNull { channel ->
-                (saved[channel.id] ?: channel.epgId)?.let { channel.id to it }
-            }.toMap()
-        } else {
-            epgMatcher.match(channels, epgStore.epgChannels()).matches
-        }
+        // Тот же порядок поиска гида, что на всех экранах: сохранённая связь → epgId канала →
+        // сопоставление по названию (EpgResolver). Иначе оверлей каналов оставлял канал
+        // без передачи там, где она есть в оверлее телепрограммы.
+        val matches = runCatching {
+            EpgResolver.resolve(
+                channels = channels,
+                links = channelEpgStore.links(),
+                epgChannels = epgStore.epgChannels(),
+                matcher = epgMatcher,
+            )
+        }.getOrDefault(emptyMap())
         val shifts = channelShifts(channels)
         // Окно расширяем на максимальный сдвиг: у канала со сдвигом «сейчас» уезжает в сторону,
         // и передача, идущая в этот момент, иначе не попадёт в выборку.
@@ -279,14 +280,13 @@ class PlayerViewModel @Inject constructor(
         if (channel == null) {
             return emptyList()
         }
-        val links = runCatching { channelEpgStore.links() }.getOrDefault(emptyMap())
-        val epgId = links[channel.id] ?: channel.epgId
+        val resolved = resolveEpg(channel)
         android.util.Log.d(
             "SmotrishkaGuide",
-            "канал='${channel.name}' связей=${links.size} epgId=${epgId ?: "нет"} " +
+            "канал='${channel.name}' epgId=${resolved ?: "нет"} " +
                 "epgId каталога='${channel.epgId ?: "нет"}'",
         )
-        val resolved = epgId ?: currentEpgId(channel) ?: return emptyList()
+        if (resolved == null) return emptyList()
         val now = clock.instant()
         val depthHours = settingsStore.archiveDepthHours.first()
         // Такое же окно, как на экране «Телепрограмма»: глубина архива назад и сутки вперёд.
@@ -338,10 +338,22 @@ class PlayerViewModel @Inject constructor(
         )
     }
 
-    /** Идентификатор канала в гиде: через сохранённые связи, иначе через сопоставление. */
-    private suspend fun currentEpgId(channel: Channel): String? =
-        channelEpgStore.links()[channel.id]
-            ?: epgMatcher.match(listOf(channel), epgStore.epgChannels()).matches[channel.id]
+    /**
+     * Канал гида для канала каталога.
+     *
+     * Порядок тот же, что у списка каналов на главном экране: сохранённая связь → `epgId`
+     * канала → сопоставление по названию ([EpgResolver]). Раньше OSD, оверлей телепрограммы
+     * и оверлей каналов искали гид по-разному, и передачи расходились.
+     */
+    private suspend fun resolveEpg(channel: Channel): String? {
+        val links = runCatching { channelEpgStore.links() }.getOrDefault(emptyMap())
+        return EpgResolver.resolve(
+            channels = listOf(channel),
+            links = links,
+            epgChannels = epgStore.epgChannels(),
+            matcher = epgMatcher,
+        )[channel.id]
+    }
 
     /** Режим кадра. */
     val aspectMode: Flow<AspectMode> = settingsStore.aspectMode
@@ -479,14 +491,10 @@ class PlayerViewModel @Inject constructor(
     }
 
     /** Передача, которая идёт прямо сейчас по этому каналу. */
-    /** Передача, которая идёт прямо сейчас по этому каналу. */
     private suspend fun currentProgramme(channel: Channel): Programme? {
-        // Та же связь с гидом и тот же сдвиг, что у списка каналов и экрана программы:
-        // иначе OSD показывал передачу, которой в эфире нет (замечание Александра 09.11.2026).
-        val epgId = channelEpgStore.links()[channel.id]
-            ?: channel.epgId
-            ?: epgMatcher.match(listOf(channel), epgStore.epgChannels()).matches[channel.id]
-            ?: return null
+        // Тот же гид и тот же сдвиг, что у списка каналов и экрана программы: иначе
+        // OSD показывал передачу, которой в эфире нет (замечание Александра 09.11.2026).
+        val epgId = resolveEpg(channel) ?: return null
 
         val shiftSeconds = epgShiftSeconds(channel)
         val at = clock.instant().minusSeconds(shiftSeconds)

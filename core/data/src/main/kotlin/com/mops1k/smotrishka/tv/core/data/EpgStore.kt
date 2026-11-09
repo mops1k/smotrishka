@@ -143,10 +143,10 @@ class EpgStore(
     suspend fun programmes(channelId: String, from: Instant, to: Instant): List<Programme> =
         dao.programmes(channelId, from.toEpochMilli(), to.toEpochMilli())
             .map(mapper::toModel)
-            // Один канал каталога может быть связан с несколькими каналами гидов (по одному
-            // на каждый источник), и тогда одна и та же передача приходит несколько раз.
-            // Оставляем по одной передаче на время начала, выбирая самую полную.
-            .distinctOverlapping()
+            // Один канал каталога может получать сетку из нескольких гидов, и одна и та же
+            // передача приходит несколько раз. Правило дедупликации одно для всех экранов —
+            // см. [withoutGuideDuplicates].
+            .withoutGuideDuplicates()
 
     /**
      * Передачи всего окна сразу, сгруппированные по каналу EPG.
@@ -170,7 +170,8 @@ class EpgStore(
             // Сначала группируем по каналу, и только потом склеиваем дубли из разных гидов:
             // иначе склейка сравнивала бы передачи разных каналов и теряла почти всё.
             .groupBy { it.channelId }
-            .mapValues { (_, programmes) -> programmes.distinctOverlapping() }
+            // То же правило, что у одиночной выборки: одинаковое название и перекрытие.
+            .mapValues { (_, programmes) -> programmes.withoutGuideDuplicates() }
 
     /**
      * До какого момента гид покрывает эфир.

@@ -34,6 +34,7 @@ import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -371,8 +372,15 @@ class HomeViewModelTest {
 
         model.selectSection(HomeSection.RECENT)
 
-        val content = model.state.first {
-            it is HomeUiState.Content && it.section == HomeSection.RECENT
+        // «Недавние» публикуются несколькими проходами: запись истории идёт на IO, и первый
+        // проход с этим разделом может прийти до того, как модель прочитала оба канала.
+        // Ждём состояние с обоими — иначе тест падал вразнобой (09.11.2026).
+        val content = withTimeout(5_000) {
+            model.state.first {
+                it is HomeUiState.Content &&
+                    it.section == HomeSection.RECENT &&
+                    it.channels.size == 2
+            }
         } as HomeUiState.Content
         assertThat(content.channels.map { it.channel.name })
             .containsExactly("Первый", "Киноканал")

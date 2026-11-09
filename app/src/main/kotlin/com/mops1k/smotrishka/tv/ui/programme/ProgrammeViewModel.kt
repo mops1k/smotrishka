@@ -4,10 +4,12 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
+import com.mops1k.smotrishka.tv.core.data.ChannelEpgStore
 import com.mops1k.smotrishka.tv.core.data.EpgStore
 import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
 import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.core.playlist.EpgMatcher
+import com.mops1k.smotrishka.tv.core.playlist.EpgResolver
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +25,7 @@ import javax.inject.Inject
  *
  * @param catalogStore каталог каналов;
  * @param epgStore программа передач;
+ * @param channelEpgStore сохранённые связи каналов с гидом;
  * @param epgMatcher сопоставление канала с EPG;
  * @param clock текущее время (подменяется в тестах);
  * @param savedStateHandle аргументы навигации (id канала).
@@ -31,6 +34,7 @@ import javax.inject.Inject
 class ProgrammeViewModel @Inject constructor(
     private val catalogStore: CatalogStore,
     private val epgStore: EpgStore,
+    private val channelEpgStore: ChannelEpgStore,
     private val epgMatcher: EpgMatcher,
     private val settingsStore: PlayerSettingsStore,
     private val clock: Clock,
@@ -62,7 +66,16 @@ class ProgrammeViewModel @Inject constructor(
         val channel = catalogStore.playlist().channels.firstOrNull { it.id == ChannelId(channelId) }
             ?: return@runCatching ProgrammeUiState.Error("Канал не найден в плейлисте")
 
-        val epgId = epgMatcher.match(listOf(channel), epgStore.epgChannels()).matches[channel.id]
+        // Тот же порядок поиска гида, что у списка каналов и плеера: сохранённая связь →
+        // epgId канала → сопоставление по названию. Раньше этот экран искал только
+        // по названию и мог взять передачу другой станции.
+        val links = runCatching { channelEpgStore.links() }.getOrDefault(emptyMap())
+        val epgId = EpgResolver.resolve(
+            channels = listOf(channel),
+            links = links,
+            epgChannels = epgStore.epgChannels(),
+            matcher = epgMatcher,
+        )[channel.id]
             ?: return@runCatching ProgrammeUiState.Error("Для этого канала нет программы передач")
 
         val now = clock.instant()

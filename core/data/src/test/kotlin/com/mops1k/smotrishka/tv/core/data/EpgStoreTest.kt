@@ -185,4 +185,85 @@ class EpgStoreTest {
 
         assertThat(programmes).hasSize(2)
     }
+
+    @Test
+    fun `дубль из другого гида с тем же названием схлопывается в обеих выборках`() = runTest {
+        store.replace(epg(programme("Новости", now, now.plusSeconds(1800))))
+        store.merge(epg(programme("Новости", now.plusSeconds(60), now.plusSeconds(1860))))
+
+        val from = now.minusSeconds(3600)
+        val to = now.plusSeconds(7200)
+
+        assertThat(store.programmes("one", from, to).map { it.title }).containsExactly("Новости")
+        assertThat(store.programmesByChannel(from, to)["one"].orEmpty().map { it.title })
+            .containsExactly("Новости")
+    }
+
+    @Test
+    fun `разные передачи с перекрытием по времени не склеиваются`() = runTest {
+        // Раньше дедупликация склеивала любые пересекающиеся передачи и теряла реальный эфир.
+        store.replace(
+            epg(
+                programme("Новости", now, now.plusSeconds(1800)),
+                programme("Фильм", now.plusSeconds(600), now.plusSeconds(3600)),
+            ),
+        )
+
+        val from = now.minusSeconds(3600)
+        val to = now.plusSeconds(7200)
+
+        assertThat(store.programmes("one", from, to).map { it.title })
+            .containsExactly("Новости", "Фильм")
+            .inOrder()
+        assertThat(store.programmesByChannel(from, to)["one"].orEmpty().map { it.title })
+            .containsExactly("Новости", "Фильм")
+            .inOrder()
+    }
+
+    @Test
+    fun `одиночная выборка и выборка окна дают одинаковый список`() = runTest {
+        store.replace(
+            epg(
+                programme("Новости", now, now.plusSeconds(1800)),
+                programme("Новости", now.plusSeconds(60), now.plusSeconds(1860)),
+                programme("Фильм", now.plusSeconds(1800), now.plusSeconds(3600)),
+                programme("Ночь", now.plusSeconds(3600), now.plusSeconds(5400)),
+            ),
+        )
+
+        val from = now.minusSeconds(3600)
+        val to = now.plusSeconds(7200)
+
+        assertThat(store.programmes("one", from, to))
+            .isEqualTo(store.programmesByChannel(from, to)["one"].orEmpty())
+        assertThat(store.programmes("one", from, to).map { it.title })
+            .containsExactly("Новости", "Фильм", "Ночь")
+            .inOrder()
+    }
+
+    @Test
+    fun `дубль склеивается с первой передачей, а не только с предыдущей`() = runTest {
+        // Сетка из гидов: «Новости» → «Фильм» внахлёст → те же «Новости» из другого гида.
+        store.replace(
+            epg(
+                programme("Новости", now, now.plusSeconds(3600)),
+                programme("Фильм", now.plusSeconds(1800), now.plusSeconds(5400)),
+                programme(
+                    "Новости",
+                    now.plusSeconds(2400),
+                    now.plusSeconds(6000),
+                    description = "Подробное описание",
+                ),
+            ),
+        )
+
+        val from = now.minusSeconds(3600)
+        val to = now.plusSeconds(10800)
+        val single = store.programmes("one", from, to)
+        val window = store.programmesByChannel(from, to)["one"].orEmpty()
+
+        assertThat(single.map { it.title }).containsExactly("Новости", "Фильм").inOrder()
+        assertThat(window).isEqualTo(single)
+        assertThat(single.first().description).isEqualTo("Подробное описание")
+    }
 }

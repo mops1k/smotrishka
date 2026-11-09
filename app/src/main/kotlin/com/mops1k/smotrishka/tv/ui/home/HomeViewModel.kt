@@ -18,7 +18,7 @@ import com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextSource
 import com.mops1k.smotrishka.tv.core.data.watchnext.WatchNextSync
 import com.mops1k.smotrishka.tv.core.model.Channel
 import com.mops1k.smotrishka.tv.core.model.ChannelId
-import com.mops1k.smotrishka.tv.core.playlist.EpgMatcher
+import com.mops1k.smotrishka.tv.core.playlist.EpgResolver
 import com.mops1k.smotrishka.tv.epg.EpgUpdater
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -897,18 +897,16 @@ class HomeViewModel @Inject constructor(
             )
         }
         mark("связи с гидом ${stored.size}")
-        // Тот же резервный путь, что у плеера: канал без сохранённой связи сопоставляем
-        // по названию. Иначе список показывал «Программы нет» там, где программа есть
-        // и видна в оверлее телепрограммы (замечание Александра 09.11.2026).
-        val links = stored + runCatching {
-            val unmatched = playlist.channels.filter { stored[it.id] == null }
-            if (unmatched.isEmpty()) {
-                emptyMap()
-            } else {
-                // Тот же сопоставитель, что использует плеер, — один путь для всех экранов.
-                EpgMatcher().match(unmatched, epgStore.epgChannels()).matches
-            }
-        }.getOrDefault(emptyMap())
+        // Единый порядок поиска гида для всех экранов: сохранённая связь → epgId канала →
+        // сопоставление по названию (EpgResolver). Иначе список показывал «Программы нет»
+        // там, где программа есть и видна в оверлее телепрограммы (замечание 09.11.2026).
+        val links = runCatching {
+            EpgResolver.resolve(
+                channels = playlist.channels,
+                links = stored,
+                epgChannels = epgStore.epgChannels(),
+            )
+        }.getOrDefault(stored)
         // У каталога провайдера часто нет адресов логотипов, а в гиде они есть.
         // Подставляем иконку гида тем каналам, у которых своего логотипа нет.
         val channelsNeedingIcon = playlist.channels.filter { it.logoUrl.isNullOrBlank() }

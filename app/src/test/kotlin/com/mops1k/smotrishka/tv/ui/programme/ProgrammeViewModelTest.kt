@@ -7,6 +7,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
+import com.mops1k.smotrishka.tv.core.data.ChannelEpgStore
 import com.mops1k.smotrishka.tv.core.data.EpgStore
 import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
 import com.mops1k.smotrishka.tv.core.data.SmotrishkaDatabase
@@ -84,6 +85,11 @@ class ProgrammeViewModelTest {
     private fun viewModel(channelId: String) = ProgrammeViewModel(
         catalogStore = catalogStore,
         epgStore = epgStore,
+        channelEpgStore = ChannelEpgStore(
+            dao = database.channelEpgDao(),
+            epgStore = epgStore,
+            epgMatcher = EpgMatcher(),
+        ),
         epgMatcher = EpgMatcher(),
         settingsStore = PlayerSettingsStore(dataStore),
         clock = Clock.fixed(now, ZoneOffset.UTC),

@@ -6,31 +6,38 @@ import com.mops1k.smotrishka.tv.core.model.Programme
  * Убирает дубли передач, пришедшие из разных гидов.
  *
  * Один канал каталога может получать сетку из нескольких гидов, и одна и та же передача
- * приходит несколько раз с расхождением в минуту по времени. Поэтому дубли определяются
- * не по точному времени начала, а по перекрытию: если передача начинается раньше, чем
- * закончилась предыдущая оставленная, это та же передача из другого гида.
- * В оверлее телепрограммы это выглядело как три одинаковые строки (замечание 09.11.2026).
+ * приходит несколько раз с расхождением в минуту по времени. Поэтому дубль определяется
+ * не по точному времени начала, а по **совпадению названия и перекрытию по времени**:
+ * передача из другого гида с другим названием — это другая передача, её склеивать нельзя.
+ * Правило одно для всех экранов (решение Александра 09.11.2026): список каналов, оверлеи
+ * «Каналы»/«Недавние», оверлей и экран «Телепрограмма» получают одинаковый список.
  *
- * Из перекрывающихся остаётся самая полная (с описанием), при равенстве — первая.
+ * Дубль сравнивается со всеми уже оставленными передачами, а не только с последней:
+ * в сетке бывает «Новости → Фильм внахлёст → те же Новости из другого гида», и третья
+ * строка обязана склеиться с первой. Из дублей остаётся время самой ранней строки
+ * (порядок строк не прыгает от источника к источнику), а описание берётся самое полное.
  *
  * @return передачи без дублей, по возрастанию времени начала.
  */
-fun List<Programme>.distinctOverlapping(): List<Programme> {
-    val sorted = sortedBy { it.start }
+fun List<Programme>.withoutGuideDuplicates(): List<Programme> {
     val result = mutableListOf<Programme>()
-    var currentEnd = sorted.firstOrNull()?.start
-    for (programme in sorted) {
-        if (result.isEmpty() || !programme.start.isBefore(currentEnd)) {
-            result.add(programme)
-            currentEnd = programme.end
-            continue
+    for (programme in sortedBy { it.start }) {
+        val duplicateAt = result.indexOfFirst { kept ->
+            kept.title == programme.title &&
+                kept.start.isBefore(programme.end) &&
+                programme.start.isBefore(kept.end)
         }
-        // Перекрытие: та же передача из другого гида. Оставляем более полное описание.
-        val last = result.last()
-        if ((programme.description?.length ?: 0) > (last.description?.length ?: 0)) {
-            result[result.lastIndex] = programme
-            currentEnd = programme.end
+        if (duplicateAt < 0) {
+            result.add(programme)
+        } else {
+            // Та же передача из другого гида: время оставляем от самой ранней строки,
+            // а описание берём самое полное — иначе от источника к источнику прыгало
+            // и время начала, и порядок строк.
+            val kept = result[duplicateAt]
+            if ((programme.description?.length ?: 0) > (kept.description?.length ?: 0)) {
+                result[duplicateAt] = kept.copy(description = programme.description)
+            }
         }
     }
-    return result
+    return result.sortedBy { it.start }
 }
