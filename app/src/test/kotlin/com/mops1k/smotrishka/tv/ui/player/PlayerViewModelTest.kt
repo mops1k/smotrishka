@@ -20,6 +20,7 @@ import com.mops1k.smotrishka.tv.core.model.Category
 import com.mops1k.smotrishka.tv.core.model.Channel
 import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.core.model.Epg
+import com.mops1k.smotrishka.tv.ui.player.RecentChannelRef
 import com.mops1k.smotrishka.tv.core.model.EpgChannel
 import com.mops1k.smotrishka.tv.core.model.Playlist
 import com.mops1k.smotrishka.tv.core.model.Programme
@@ -31,6 +32,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -53,6 +57,13 @@ import java.time.ZoneOffset
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class PlayerViewModelTest {
+
+    /** Сколько раз пробуем дождаться описания передачи в «Недавних». */
+    private val recentsAttempts = 3
+
+    /** Таймаут одной попытки: реальное время, медленный раннер. */
+    private val recentsAttemptMs = 5_000L
+
 
     private lateinit var database: SmotrishkaDatabase
     private lateinit var catalogStore: CatalogStore
@@ -91,6 +102,28 @@ class PlayerViewModelTest {
         Dispatchers.resetMain()
         settingsScope.cancel()
         database.close()
+    }
+
+
+    /**
+     * Дожидается строки «Недавних» с описанием передачи.
+     *
+     * На медленном раннере первое чтение возвращается раньше, чем гид прочитан из базы,
+     * а новых излучений у потока нет — поэтому попытки повторяются на новом экземпляре
+     * модели с реальным таймаутом (флейк CI 10.11.2026).
+     */
+    private suspend fun TestScope.awaitRecentsWithDescription(): List<RecentChannelRef> {
+        repeat(recentsAttempts) {
+            val rows = withContext(Dispatchers.Default) {
+                withTimeoutOrNull(recentsAttemptMs) {
+                    viewModel("one").recents.first { list ->
+                        list.any { row -> row.programmeDescription != null }
+                    }
+                }
+            }
+            if (rows != null) return rows
+        }
+        error("описание передачи в «Недавних» не появилось")
     }
 
     private fun viewModel(channelId: String, startEpoch: Long = PlayerViewModel.NO_START) = PlayerViewModel(
@@ -377,9 +410,7 @@ class PlayerViewModelTest {
             ),
         )
 
-        val recents = viewModel("one")
-            .recents
-            .first { list -> list.any { it.programmeDescription != null } }
+        val recents = awaitRecentsWithDescription()
         val row = recents.first { it.id == "one" }
 
         assertThat(row.hasArchive).isFalse()
