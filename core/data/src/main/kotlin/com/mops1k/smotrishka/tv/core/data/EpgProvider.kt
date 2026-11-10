@@ -3,12 +3,15 @@ package com.mops1k.smotrishka.tv.core.data
 import com.mops1k.smotrishka.tv.core.model.Channel
 import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.core.model.EpgChannel
+import com.mops1k.smotrishka.tv.core.model.Programme
 import com.mops1k.smotrishka.tv.core.playlist.EpgIndex
 import com.mops1k.smotrishka.tv.core.playlist.EpgMatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -31,12 +34,14 @@ import javax.inject.Singleton
  *
  * @param channelEpgStore сохранённые связи каналов с гидом;
  * @param epgStore хранилище программы передач;
+ * @param settingsStore настройки плеера: общий и поканальный сдвиги гида;
  * @param matcher сопоставитель каналов по `tvg-id` и названию.
  */
 @Singleton
 class EpgProvider @Inject constructor(
     private val channelEpgStore: ChannelEpgStore,
     private val epgStore: EpgStore,
+    private val settingsStore: PlayerSettingsStore,
     private val matcher: EpgMatcher = EpgMatcher(),
 ) {
 
@@ -152,6 +157,185 @@ class EpgProvider @Inject constructor(
     }
 
     /**
+     * Передачи, которые идут сейчас, для списка каналов — единственная точка входа.
+     *
+     * Главный экран, оверлеи «Каналы» и «Недавние каналы» спрашивают передачу здесь: окно
+     * выборки и сдвиг гида (общий и поканальный) считаются в одном месте, поэтому списки
+     * не расходятся (указание Александра 11.11.2026).
+     *
+     * Окно расширяется на сдвиг любого знака: у канала со сдвигом −3 ч «сейчас» для гида
+     * наступает через три часа, и без запаса в будущем передача не находилась вовсе —
+     * главный экран показывал передачу, а оверлей каналов нет.
+     *
+     * Передачи запрашиваются одним действием на всё окно: по запросу на канал список открывался
+     * бы секундами, а на каталоге в тысячи каналов — минутами.
+     *
+     * @param channels каналы каталога, по которым нужны передачи (только они, не весь каталог);
+     * @param now текущий момент;
+     * @param links готовые связи каналов с гидом, если экран их уже посчитал;
+     * @param backHours сколько часов назад искать передачу;
+     * @param forwardHours сколько часов вперёд искать передачу;
+     * @return передача по идентификатору канала каталога; канала нет в ответе — передачи нет.
+     */
+    suspend fun current(
+        channels: List<Channel>,
+        now: Instant,
+        links: Map<ChannelId, String>? = null,
+        backHours: Long = NOW_BACK_HOURS,
+        forwardHours: Long = NOW_FORWARD_HOURS,
+    ): Map<ChannelId, NowProgramme> {
+        if (channels.isEmpty()) return emptyMap()
+        val matched = links
+            ?: runCatching { links(channels, now) }.getOrDefault(emptyMap())
+        val shiftSettings = shiftSettings()
+        val shiftSeconds = channels.associate { channel ->
+            channel.id.value to
+                (shiftSettings.own[channel.id.value] ?: shiftSettings.default).toLong() * 3600L
+        }
+        // Сдвиг назад требует запаса в прошлом, сдвиг вперёд — в будущем.
+        val maxBack = shiftSeconds.values.maxOrNull()?.coerceAtLeast(0L) ?: 0L
+        val maxForward = shiftSeconds.values.minOrNull()?.let { (-it).coerceAtLeast(0L) } ?: 0L
+        val programmes = runCatching {
+            epgStore.programmesByChannel(
+                from = now.minus(backHours, ChronoUnit.HOURS).minusSeconds(maxBack),
+                to = now.plus(forwardHours, ChronoUnit.HOURS).plusSeconds(maxForward),
+            )
+        }.getOrDefault(emptyMap())
+        if (programmes.isEmpty()) return emptyMap()
+        return channels.mapNotNull { channel ->
+            val epgId = matched[channel.id] ?: channel.epgId?.takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+            val schedule = programmes[epgId] ?: return@mapNotNull null
+            val shift = shiftSeconds[channel.id.value] ?: 0L
+            val at = now.minusSeconds(shift)
+            val current = schedule.firstOrNull { !it.start.isAfter(at) && it.end.isAfter(at) }
+                ?: return@mapNotNull null
+            channel.id to NowProgramme(
+                title = current.title,
+                description = current.description,
+                start = current.start.plusSeconds(shift),
+                end = current.end.plusSeconds(shift),
+                nextTitle = schedule.firstOrNull { it.start.isAfter(at) }?.title,
+            )
+        }.toMap()
+    }
+
+    /**
+     * Передача канала на заданный момент: и «сейчас», и архивный выбор.
+     *
+     * Момент приходит в показываемом (местном) времени, поэтому к сетке гида он приводится
+     * через сдвиг канала: без этого в шапке плеера стояла чужая передача — та, что идёт
+     * в это время по сетке сдвинутого гида (замечание Александра 11.11.2026).
+     *
+     * @param channel канал каталога;
+     * @param moment момент в показываемом времени;
+     * @return передача с границами уже в показываемом времени; `null` — гид её не знает.
+     */
+    suspend fun at(channel: Channel, moment: Instant): NowProgramme? {
+        val shift = shiftSeconds(channel.id.value)
+        val guideMoment = moment.minusSeconds(shift)
+        val epgId = epgId(channel, guideMoment)
+            ?: channel.epgId?.takeIf { it.isNotBlank() }
+            ?: return null
+        val schedule = runCatching {
+            epgStore.programmes(
+                channelId = epgId,
+                from = guideMoment.minus(MOMENT_WINDOW_HOURS, ChronoUnit.HOURS),
+                to = guideMoment.plus(MOMENT_WINDOW_HOURS, ChronoUnit.HOURS),
+            )
+        }.getOrDefault(emptyList())
+        val current = schedule.firstOrNull {
+            !it.start.isAfter(guideMoment) && it.end.isAfter(guideMoment)
+        } ?: return null
+        return NowProgramme(
+            title = current.title,
+            description = current.description,
+            start = current.start.plusSeconds(shift),
+            end = current.end.plusSeconds(shift),
+            nextTitle = schedule.firstOrNull { it.start.isAfter(guideMoment) }?.title,
+        )
+    }
+
+    /**
+     * Сдвиг гида канала в секундах: свой важнее общего (решение Александра 09.11.2026).
+     *
+     * @param channelId идентификатор канала каталога.
+     */
+    suspend fun shiftSeconds(channelId: String): Long {
+        val shifts = shiftSettings()
+        return (shifts.own[channelId] ?: shifts.default).toLong() * 3600L
+    }
+
+    /**
+     * Момент, который сейчас играет у зрителя.
+     *
+     * Единственное место, где решается, «где мы»: в архиве это начало выбранной передачи,
+     * в прямом эфире — текущее время. По нему плеер ставит фокус в «Телепрограмме» на ту
+     * передачу, которую человек смотрит, а не на эфирную (указание Александра 11.11.2026).
+     *
+     * @param startEpochSeconds начало архивной передачи; `null` или [NO_START] — прямой эфир;
+     * @param now текущий момент.
+     */
+    fun playbackMoment(startEpochSeconds: Long?, now: Instant): Instant =
+        if (startEpochSeconds == null || startEpochSeconds == NO_START) {
+            now
+        } else {
+            Instant.ofEpochSecond(startEpochSeconds)
+        }
+
+    /**
+     * Полная телепрограмма канала: границы уже со сдвигом гида канала.
+     *
+     * Единственный вход для списков передач — экран телепрограммы, разворот карточки и панель
+     * «Телепрограмма» в плеере: окно и сдвиг считаются здесь, поэтому сетки не расходятся.
+     *
+     * @param channel канал каталога;
+     * @param from начало окна в показываемом времени;
+     * @param to конец окна в показываемом времени;
+     * @param now текущий момент.
+     */
+    suspend fun schedule(
+        channel: Channel,
+        from: Instant,
+        to: Instant,
+        now: Instant,
+    ): List<Programme> {
+        val shift = shiftSeconds(channel.id.value)
+        val guideNow = now.minusSeconds(shift)
+        val found = programmes(
+            channel = channel,
+            from = from.minusSeconds(shift),
+            to = to.minusSeconds(shift),
+            now = guideNow,
+        )
+        if (shift == 0L) return found
+        return found.map {
+            it.copy(start = it.start.plusSeconds(shift), end = it.end.plusSeconds(shift))
+        }
+    }
+
+    /** Иконки каналов гида: у каталога провайдера своих адресов логотипов часто нет. */
+    suspend fun epgIcons(epgIds: Set<String>): Map<String, String> =
+        if (epgIds.isEmpty()) emptyMap() else runCatching { epgStore.icons(epgIds) }.getOrDefault(emptyMap())
+
+    /** Сколько передач в базе: экран перечитывает программу, когда это число меняется. */
+    val programmeCount: Flow<Int> get() = epgStore.programmeCount
+
+    /** Название канала гида — для диагностики сопоставления в журнале. */
+    suspend fun epgName(epgId: String): String? = runCatching {
+        epgStore.epgChannels().firstOrNull { it.id == epgId }?.displayName
+    }.getOrNull()
+
+    /** Сдвиги гида из настроек: поканальные и общий по умолчанию. */
+    private suspend fun shiftSettings(): ShiftSettings = ShiftSettings(
+        own = runCatching { settingsStore.epgShifts.first() }.getOrDefault(emptyMap()),
+        default = runCatching { settingsStore.globalEpgShift.first() }.getOrDefault(0),
+    )
+
+    /** Сдвиги гида в часах: поканальные и общий по умолчанию. */
+    private data class ShiftSettings(val own: Map<String, Int>, val default: Int)
+
+    /**
      * Проверяет подмену гида по бренду.
      *
      * @return канал гида: выбранный, если подмены не было или сетки совпали, иначе привязанный.
@@ -228,7 +412,19 @@ class EpgProvider @Inject constructor(
         /** Глубина сверки сеток: сутки назад. */
         const val VERIFY_HOURS = 24L
 
+        /** Значение «архивной передачи нет»: прямой эфир. */
+        const val NO_START = -1L
+
         /** Размер пачки при параллельной нормализации имён гида. */
         const val INDEX_CHUNK = 256
+
+        /** Окно поиска текущей передачи для списка каналов: шесть часов назад. */
+        const val NOW_BACK_HOURS = 6L
+
+        /** Окно поиска текущей передачи для списка каналов: два часа вперёд. */
+        const val NOW_FORWARD_HOURS = 2L
+
+        /** Окно поиска передачи на момент: сутки, столько же у экрана телепрограммы. */
+        const val MOMENT_WINDOW_HOURS = 24L
     }
 }

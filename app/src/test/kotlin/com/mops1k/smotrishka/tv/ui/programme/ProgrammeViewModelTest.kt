@@ -98,12 +98,6 @@ class ProgrammeViewModelTest {
 
     private fun viewModel(channelId: String) = ProgrammeViewModel(
         catalogStore = catalogStore,
-        epgStore = epgStore,
-        channelEpgStore = ChannelEpgStore(
-            dao = database.channelEpgDao(),
-            epgStore = epgStore,
-            epgMatcher = EpgMatcher(),
-        ),
         epgMatcher = EpgMatcher(),
         settingsStore = PlayerSettingsStore(dataStore),
         clock = Clock.fixed(now, ZoneOffset.UTC),
@@ -114,6 +108,7 @@ class ProgrammeViewModelTest {
                 epgMatcher = EpgMatcher(),
             ),
             epgStore = epgStore,
+            settingsStore = PlayerSettingsStore(dataStore),
         ),
         savedStateHandle = SavedStateHandle(mapOf(ProgrammeViewModel.ARG_CHANNEL_ID to channelId)),
     ).also { viewModels += it }

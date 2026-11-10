@@ -4,9 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
-import com.mops1k.smotrishka.tv.core.data.ChannelEpgStore
 import com.mops1k.smotrishka.tv.core.data.EpgProvider
-import com.mops1k.smotrishka.tv.core.data.EpgStore
 import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
 import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.core.playlist.EpgMatcher
@@ -24,8 +22,7 @@ import javax.inject.Inject
  * Экран программы канала: что было, что идёт и что будет.
  *
  * @param catalogStore каталог каналов;
- * @param epgStore программа передач;
- * @param channelEpgStore сохранённые связи каналов с гидом;
+ * @param epgProvider единственный вход к телепрограмме;
  * @param epgMatcher сопоставление канала с EPG;
  * @param clock текущее время (подменяется в тестах);
  * @param savedStateHandle аргументы навигации (id канала).
@@ -33,8 +30,6 @@ import javax.inject.Inject
 @HiltViewModel
 class ProgrammeViewModel @Inject constructor(
     private val catalogStore: CatalogStore,
-    private val epgStore: EpgStore,
-    private val channelEpgStore: ChannelEpgStore,
     private val epgMatcher: EpgMatcher,
     private val settingsStore: PlayerSettingsStore,
     private val clock: Clock,
@@ -67,10 +62,6 @@ class ProgrammeViewModel @Inject constructor(
         val channel = catalogStore.playlist().channels.firstOrNull { it.id == ChannelId(channelId) }
             ?: return@runCatching ProgrammeUiState.Error("Канал не найден в плейлисте")
 
-        // Тот же порядок поиска гида, что у списка каналов и плеера: сохранённая связь →
-        // epgId канала → сопоставление по названию. Раньше этот экран искал только
-        // по названию и мог взять передачу другой станции.
-        val links = runCatching { channelEpgStore.links() }.getOrDefault(emptyMap())
         // Общий порядок поиска гида с проверкой подмены источника: привязанный гид, у которого
         // нет свежих передач, уступает одноимённому только при совпадающей сетке.
         val epgId = runCatching { epgProvider.epgId(channel, clock.instant()) }.getOrNull()
@@ -78,28 +69,15 @@ class ProgrammeViewModel @Inject constructor(
 
         val now = clock.instant()
         val depthHours = settingsStore.archiveDepthHours.first()
-        // Сдвиг гида: свой у канала важнее общего (решение Александра 09.11.2026).
-        val shiftHours = settingsStore.epgShifts.first()[channel.id.value]
-            ?: settingsStore.globalEpgShift.first()
-        val shiftSeconds = shiftHours.toLong() * 60L * 60L
         // Список программы показывает передачи на всю глубину архива, а не только сутки назад.
         val backHours = maxOf(BACK_HOURS, depthHours.toLong())
-        val programmes = epgStore.programmes(
-            channelId = epgId,
+        // Гид, сдвиг и окно — один вход провайдера: экран не считает их сам.
+        val programmes = epgProvider.schedule(
+            channel = channel,
             from = now.minus(backHours, ChronoUnit.HOURS),
             to = now.plus(FORWARD_HOURS, ChronoUnit.HOURS),
-        ).map { programme ->
-            if (shiftSeconds == 0L) {
-                programme
-            } else {
-                // Сетка провайдера со смещением: показываем время с поправкой,
-                // а «сейчас»/«прошла» считаем уже по исправленному времени.
-                programme.copy(
-                    start = programme.start.plusSeconds(shiftSeconds),
-                    end = programme.end.plusSeconds(shiftSeconds),
-                )
-            }
-        }
+            now = now,
+        )
 
         ProgrammeUiState.Content(
             channelId = channel.id,

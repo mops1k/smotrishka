@@ -137,7 +137,6 @@ class HomeViewModelTest {
 
     private fun viewModel() = HomeViewModel(
         catalogStore = catalogStore,
-        epgStore = epgStore,
         channelEpgStore = channelEpgStore(),
         settingsStore = settingsStore,
         favoritesStore = favoritesStore,
@@ -147,7 +146,11 @@ class HomeViewModelTest {
         epgUpdater = epgUpdater(),
         searchRepository = searchRepository,
         watchNextSync = watchNextSync,
-        epgProvider = EpgProvider(channelEpgStore = channelEpgStore(), epgStore = epgStore),
+        epgProvider = EpgProvider(
+            channelEpgStore = channelEpgStore(),
+            epgStore = epgStore,
+            settingsStore = settingsStore,
+        ),
     ).also { viewModels += it }
 
     /** Связи каналов с гидом: на них же опирается лента «Сейчас идёт». */

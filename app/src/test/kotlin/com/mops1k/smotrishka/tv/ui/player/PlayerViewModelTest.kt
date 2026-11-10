@@ -140,7 +140,6 @@ class PlayerViewModelTest {
 
     private fun viewModel(channelId: String, startEpoch: Long = PlayerViewModel.NO_START) = PlayerViewModel(
         catalogStore = catalogStore,
-        epgStore = epgStore,
         channelEpgStore = ChannelEpgStore(
             dao = database.channelEpgDao(),
             epgStore = epgStore,
@@ -157,6 +156,7 @@ class PlayerViewModelTest {
                 epgMatcher = EpgMatcher(),
             ),
             epgStore = epgStore,
+            settingsStore = settingsStore,
         ),
         savedStateHandle = SavedStateHandle(
             mapOf(
@@ -246,6 +246,17 @@ class PlayerViewModelTest {
         // в ArchiveRecorder (иначе обновление программы перезапускало архив).
         assertThat(state.streamUrl).contains("utc=${start.epochSecond}")
         assertThat(state.streamUrl).doesNotContain("lutc=")
+    }
+
+    @Test
+    fun `в архиве играющий момент — начало выбранной передачи`() = runTest {
+        val start = now.minusSeconds(7200)
+
+        assertThat(
+            viewModel("one", startEpoch = start.epochSecond).playingMoment(),
+        ).isEqualTo(start)
+        // Прямой эфир: играющий момент — текущее время (часы в тесте зафиксированы).
+        assertThat(viewModel("one").playingMoment()).isEqualTo(now)
     }
 
     @Test

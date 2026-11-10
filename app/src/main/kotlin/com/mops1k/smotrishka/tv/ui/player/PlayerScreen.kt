@@ -253,6 +253,8 @@ fun PlayerScreen(
                 onGoLive = { onGoLive(current.channelId) },
                 onOpenArchive = onOpenArchive,
                 schedule = schedule,
+                // Момент, который играет: в архиве — начало выбранной передачи.
+                playingMoment = viewModel::playingMoment,
                 osdHideSeconds = osdHideSeconds,
             )
         }
@@ -293,6 +295,8 @@ private fun PlayerContent(
     onGoLive: () -> Unit,
     onOpenArchive: (ChannelId, Instant) -> Unit,
     schedule: List<ProgrammeRowUi>,
+    // Момент, который играет у зрителя: в архиве — начало выбранной передачи.
+    playingMoment: () -> Instant,
     // Сколько секунд меню плеера остаётся на экране (значение из настроек).
     osdHideSeconds: Int,
 ) {
@@ -1172,7 +1176,15 @@ private fun PlayerContent(
             // Телепрограмма текущего канала: то же оформление, что у списка каналов.
             val programmeState = rememberLazyListState()
             val currentProgramme = remember { FocusRequester() }
-            val nowIndex = schedule.indexOfFirst { it.status == ProgrammeStatus.NOW }
+            // Фокус — на передаче, которую смотрим: в архиве это выбранная передача, а не та,
+            // что идёт в прямом эфире. Играющий момент решает провайдер (указание 11.11.2026).
+            // Пересчитываем при открытии панели: в долгом эфире «сейчас» успевает уехать вперёд.
+            val playingAt = remember(programmeVisible, schedule) { playingMoment() }
+            val watchedIndex = schedule.indexOfFirst {
+                !it.programme.start.isAfter(playingAt) && it.programme.end.isAfter(playingAt)
+            }
+            val nowIndex = watchedIndex.takeIf { it >= 0 }
+                ?: schedule.indexOfFirst { it.status == ProgrammeStatus.NOW }
             LaunchedEffect(programmeVisible, schedule.size) {
                 val visible = programmeState.layoutInfo.visibleItemsInfo.size.takeIf { it > 0 } ?: 5
                 programmeState.scrollToItem((nowIndex.coerceAtLeast(0) - visible / 2).coerceAtLeast(0))
@@ -1191,7 +1203,7 @@ private fun PlayerContent(
                     // (решение Александра 09.11.2026).
                     var detailRow by remember {
                         mutableStateOf(
-                            schedule.firstOrNull { it.status == ProgrammeStatus.NOW } ?: schedule.first(),
+                            schedule.getOrNull(nowIndex) ?: schedule.first(),
                         )
                     }
                     Row(modifier = Modifier.weight(1f)) {

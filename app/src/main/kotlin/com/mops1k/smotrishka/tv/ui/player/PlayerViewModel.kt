@@ -10,7 +10,7 @@ import com.mops1k.smotrishka.tv.core.data.AudioLanguage
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
 import com.mops1k.smotrishka.tv.core.data.ChannelEpgStore
 import com.mops1k.smotrishka.tv.core.data.EpgProvider
-import com.mops1k.smotrishka.tv.core.data.EpgStore
+import com.mops1k.smotrishka.tv.core.data.NowProgramme
 import com.mops1k.smotrishka.tv.core.data.FavoritesStore
 import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
 import com.mops1k.smotrishka.tv.core.data.RecentChannelsStore
@@ -20,6 +20,7 @@ import com.mops1k.smotrishka.tv.core.model.Channel
 import com.mops1k.smotrishka.tv.core.model.ChannelId
 import com.mops1k.smotrishka.tv.core.model.Programme
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.flow.stateIn
@@ -44,15 +46,15 @@ import javax.inject.Inject
  * смены источника), плеер честно скажет об этом вместо пустого чёрного экрана.
  *
  * @param catalogStore каталог каналов;
- * @param epgStore программа передач;
+ * @param channelEpgStore сохранённые связи каналов с гидом (логотипы панелей);
  * @param settingsStore настройки плеера (буферизация);
  * @param clock текущее время (подменяется в тестах);
+ * @param epgProvider единственный вход к телепрограмме;
  * @param savedStateHandle аргументы навигации (id канала).
  */
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
     private val catalogStore: CatalogStore,
-    private val epgStore: EpgStore,
     private val channelEpgStore: ChannelEpgStore,
     private val settingsStore: PlayerSettingsStore,
     private val recentChannels: RecentChannelsStore,
@@ -68,6 +70,17 @@ class PlayerViewModel @Inject constructor(
 
     /** Начало архивной передачи в секундах эпохи, `NO_START` — прямой эфир. */
     private val startEpochSeconds: Long = savedStateHandle.get<Long>(ARG_START) ?: NO_START
+
+    /**
+     * Момент, который играет у зрителя: в архиве — начало выбранной передачи, в эфире — сейчас.
+     *
+     * Решает [EpgProvider.playbackMoment], а не плеер: по этому моменту «Телепрограмма» ставит
+     * фокус на ту передачу, которую человек смотрит (указание Александра 11.11.2026).
+     */
+    fun playingMoment(): Instant = epgProvider.playbackMoment(
+        startEpochSeconds = startEpochSeconds.takeIf { it > NO_START },
+        now = clock.instant(),
+    )
 
     private val _state = MutableStateFlow<PlayerUiState>(PlayerUiState.Loading)
 
@@ -123,22 +136,52 @@ class PlayerViewModel @Inject constructor(
      * список, обычная категория — её каналы. Считается [ChannelListScope], чтобы список
      * и переключение не разъехались.
      */
-    val channelsInScope: Flow<List<ChannelRef>> = flow {
+    val channelsInScope: Flow<List<ChannelRef>> = liveRows(
+        initial = { scopeRefs() },
+        enriched = { withProgrammes(scopeRefs()) },
+        hasProgramme = { rows -> rows.any { it.programmeEnd != null } },
+    )
+
+    /** Каналы категории без передач: дешёвая выборка для соседей и первого кадра панели. */
+    private suspend fun scopeRefs(): List<ChannelRef> {
         val category = settingsStore.lastCategory.first()
         val favoriteIds = favoritesStore.channels.first()
-        val catalog = catalogStore.playlist().channels
-        val scope = ChannelListScope.resolve(
-            channels = catalog,
+        return ChannelListScope.resolve(
+            channels = catalogStore.playlist().channels,
             category = category,
             favoriteIds = favoriteIds,
             allCategory = PlayerSettingsStore.ALL_CATEGORY,
             favoritesCategory = FAVORITES_CATEGORY,
         )
-        // Сразу отдаём список с названиями: панель открывается мгновенно, а передачи
-        // и иконки приходят следом (раньше на первом открытии список был пустым).
-        emit(scope)
-        emit(withProgrammes(scope, catalog))
     }
+
+    /**
+     * Живой список оверлея: первое излучение дешёвое, дальше передачи пересчитываются по таймеру,
+     * пока экран открыт.
+     *
+     * Пустая выборка гида не стирает уже показанные передачи: гид мог не прочитаться из-за
+     * импорта, и «передач нет» на экране было бы враньём — то же правило, что на главном экране.
+     *
+     * @param initial дешёвая выборка без передач: панель должна открыться сразу;
+     * @param enriched та же выборка с передачами и иконками;
+     * @param hasProgramme есть ли в выборке хотя бы одна передача.
+     */
+    private fun <T> liveRows(
+        initial: suspend () -> List<T>,
+        enriched: suspend () -> List<T>,
+        hasProgramme: (List<T>) -> Boolean,
+    ): Flow<List<T>> = flow {
+        var shown = initial()
+        emit(shown)
+        while (true) {
+            val fresh = enriched()
+            if (!hasProgramme(shown) || hasProgramme(fresh)) {
+                shown = fresh
+                emit(shown)
+            }
+            delay(CHANNEL_LIST_REFRESH_MS)
+        }
+    }.flowOn(Dispatchers.Default)
 
     /**
      * Логотипы каналов по идентификаторам.
@@ -151,97 +194,55 @@ class PlayerViewModel @Inject constructor(
         if (withoutLogo.isEmpty()) return emptyMap()
         val links = runCatching { channelEpgStore.links() }.getOrDefault(emptyMap())
         val epgIds = withoutLogo.mapNotNull { links[it.id] }.toSet()
-        val icons = runCatching { epgStore.icons(epgIds) }.getOrDefault(emptyMap())
+        val icons = epgProvider.epgIcons(epgIds)
         return withoutLogo.mapNotNull { channel ->
             links[channel.id]?.let { icons[it] }?.let { channel.id.value to it }
         }.toMap()
     }
 
-    private suspend fun withProgrammes(
-        scope: List<ChannelRef>,
-        catalog: List<Channel>,
-    ): List<ChannelRef> {
-        val programmes = nowProgrammes(catalog)
-        val logos = logoUrls(catalog)
-        return scope.map { ref ->
-            val programme = programmes[ref.id]
+    /**
+     * Передачи и иконки только для каналов списка.
+     *
+     * Считать по всему каталогу (на планшете 3147 каналов) — секунды на каждый вход в плеер,
+     * а показываются сотни. Передачу выбирает [EpgProvider.current]: окно и сдвиг гида
+     * любого знака считаются в одном месте с главным экраном.
+     */
+    private suspend fun withProgrammes(refs: List<ChannelRef>): List<ChannelRef> {
+        val catalog = catalogStore.playlist().channels
+        val ids = refs.mapTo(HashSet()) { it.id }
+        val channels = catalog.filter { it.id.value in ids }
+        val programmes = epgProvider.current(channels = channels, now = clock.instant())
+        val logos = logoUrls(channels)
+        return refs.map { ref ->
+            val programme = programmes[ChannelId(ref.id)]
             ref.copy(
                 programmeTitle = programme?.title,
                 programmeDescription = programme?.description,
                 programmeStart = programme?.start,
                 programmeEnd = programme?.end,
-                logoUrl = logos[ref.id],
+                logoUrl = logos[ref.id] ?: ref.logoUrl,
             )
         }
     }
 
     /**
-     * Текущие передачи по идентификаторам каналов.
+     * Соседние каналы по алфавиту: (предыдущий, следующий).
      *
-     * Один запрос к гиду на весь набор: по одному запросу на канал список открывался бы
-     * секундами, а на панели недавних — тем более. Границы передачи показываются со сдвигом
-     * гида канала, как в OSD и на главном экране: иначе полоса прогресса и подпись «до HH:MM»
-     * разъезжаются с тем, что человек видит в эфире.
+     * Считаются по дешёвой выборке без передач: соседям передача не нужна, а прежний вариант
+     * запускал из-за них второй тяжёлый проход по гиду.
      */
-    private suspend fun nowProgrammes(channels: List<Channel>): Map<String, NowProgramme> {
-        if (channels.isEmpty()) return emptyMap()
-        val now = clock.instant()
-        // Тот же порядок поиска гида, что на всех экранах: сохранённая связь → epgId канала →
-        // сопоставление по названию, с проверкой подмены источника (EpgProvider).
-        // Иначе оверлей каналов оставлял канал без передачи там, где она есть в оверлее
-        // телепрограммы.
-        val matches = runCatching {
-            epgProvider.links(channels, channelEpgStore.links(), now)
-        }.getOrDefault(emptyMap())
-        val shifts = channelShifts(channels)
-        // Окно расширяем на максимальный сдвиг: у канала со сдвигом «сейчас» уезжает в сторону,
-        // и передача, идущая в этот момент, иначе не попадёт в выборку.
-        val maxShift = shifts.values.maxOrNull()?.coerceAtLeast(0L) ?: 0L
-        val programmes = epgStore.programmesByChannel(
-            from = now.minus(6, ChronoUnit.HOURS).minusSeconds(maxShift),
-            to = now.plus(2, ChronoUnit.HOURS),
-        )
-        return channels.mapNotNull { channel ->
-            val epgId = matches[channel.id] ?: return@mapNotNull null
-            val shiftSeconds = shifts[channel.id.value] ?: 0L
-            val at = now.minusSeconds(shiftSeconds)
-            val current = programmes[epgId]
-                ?.firstOrNull { !it.start.isAfter(at) && it.end.isAfter(at) }
-                ?: return@mapNotNull null
-            channel.id.value to NowProgramme(
-                title = current.title,
-                description = current.description,
-                start = current.start.plusSeconds(shiftSeconds),
-                end = current.end.plusSeconds(shiftSeconds),
-            )
-        }.toMap()
-    }
-
-    /**
-     * Сдвиги гида каналов в секундах.
-     *
-     * Свой сдвиг канала важнее общего (решение Александра 09.11.2026) — то же правило,
-     * что у OSD и списка каналов.
-     */
-    private suspend fun channelShifts(channels: List<Channel>): Map<String, Long> {
-        val own = runCatching { settingsStore.epgShifts.first() }.getOrDefault(emptyMap())
-        val global = runCatching { settingsStore.globalEpgShift.first() }.getOrDefault(0)
-        return channels.associate { channel ->
-            channel.id.value to (own[channel.id.value] ?: global).toLong() * 60L * 60L
+    val neighbours: Flow<Pair<String?, String?>> = flow { emit(scopeRefs()) }
+        .flowOn(Dispatchers.Default)
+        .map { scope ->
+            val index = scope.indexOfFirst { it.id == channelId }
+            if (index < 0 || scope.size < 2) {
+                null to null
+            } else {
+                // По кругу: с первого канала вверх — последний, с последнего вниз — первый.
+                scope[(index - 1 + scope.size) % scope.size].id to
+                    scope[(index + 1) % scope.size].id
+            }
         }
-    }
-
-    /** Соседние каналы по алфавиту: (предыдущий, следующий). */
-    val neighbours: Flow<Pair<String?, String?>> = channelsInScope.map { scope ->
-        val index = scope.indexOfFirst { it.id == channelId }
-        if (index < 0 || scope.size < 2) {
-            null to null
-        } else {
-            // По кругу: с первого канала вверх — последний, с последнего вниз — первый.
-            scope[(index - 1 + scope.size) % scope.size].id to
-                scope[(index + 1) % scope.size].id
-        }
-    }
 
     /**
      * Телепрограмма текущего канала для OSD-панели.
@@ -274,34 +275,21 @@ class PlayerViewModel @Inject constructor(
         if (channel == null) {
             return emptyList()
         }
-        val resolved = resolveEpg(channel)
-        android.util.Log.d(
-            "SmotrishkaGuide",
-            "канал='${channel.name}' epgId=${resolved ?: "нет"} " +
-                "epgId каталога='${channel.epgId ?: "нет"}'",
-        )
-        if (resolved == null) return emptyList()
         val now = clock.instant()
         val depthHours = settingsStore.archiveDepthHours.first()
         // Такое же окно, как на экране «Телепрограмма»: глубина архива назад и сутки вперёд.
         val backHours = maxOf(SCHEDULE_BACK_HOURS, depthHours.toLong())
-        val programmes = epgStore.programmes(
-            channelId = resolved,
+        // Сдвиг гида и окно считает провайдер — тот же вход, что у списков каналов.
+        val programmes = epgProvider.schedule(
+            channel = channel,
             from = now.minus(backHours, ChronoUnit.HOURS),
             to = now.plus(SCHEDULE_FORWARD_HOURS, ChronoUnit.HOURS),
+            now = now,
         )
-        val shiftSeconds = epgShiftSeconds(channel)
-        val shifted = if (shiftSeconds == 0L) {
-            programmes
-        } else {
-            programmes.map {
-                it.copy(start = it.start.plusSeconds(shiftSeconds), end = it.end.plusSeconds(shiftSeconds))
-            }
-        }
         // Диагностика: видно, с каким каналом гида сопоставлен канал и что считается текущим.
-        logGuideMatch(channel, resolved, programmes, shiftSeconds)
+        logGuideMatch(channel, programmes)
         return ProgrammeRows.build(
-            programmes = shifted,
+            programmes = programmes,
             now = now,
             channelHasArchive = channel.archive != null,
         )
@@ -313,41 +301,21 @@ class PlayerViewModel @Inject constructor(
      * Пишет в журнал, с каким каналом гида сопоставлен канал каталога и какая передача
      * считается текущей. Нужно, чтобы отличить чужую сетку передач от сдвига времени.
      */
-    private suspend fun logGuideMatch(
-        channel: Channel,
-        epgId: String,
-        programmes: List<Programme>,
-        shiftSeconds: Long = 0L,
-    ) {
-        val epgName = runCatching {
-            epgStore.epgChannels().firstOrNull { it.id == epgId }?.displayName
-        }.getOrNull()
-        val at = clock.instant().minusSeconds(shiftSeconds)
+    private suspend fun logGuideMatch(channel: Channel, programmes: List<Programme>) {
+        val epgId = runCatching { epgProvider.epgId(channel, clock.instant()) }.getOrNull()
+        val epgName = epgId?.let { epgProvider.epgName(it) }
+        val at = clock.instant()
         val current = programmes.firstOrNull { !it.start.isAfter(at) && it.end.isAfter(at) }
         val head = programmes.take(3).joinToString(" | ") { "${it.title} ${it.start}..${it.end}" }
         val tail = programmes.takeLast(3).joinToString(" | ") { "${it.title} ${it.start}..${it.end}" }
         android.util.Log.d(
             "SmotrishkaGuide",
-            "канал='${channel.name}' epgId=$epgId гид='${epgName.orEmpty()}' " +
-                "всего=${programmes.size} сдвиг=$shiftSeconds " +
+            "канал='${channel.name}' epgId=${epgId ?: "нет"} гид='${epgName.orEmpty()}' " +
+                "всего=${programmes.size} сдвиг=${epgProvider.shiftSeconds(channel.id.value)} " +
                 "текущая='${current?.title.orEmpty()}' " +
-                "начало=${current?.start} конец=${current?.end} сейчас=${clock.instant()} " +
+                "начало=${current?.start} конец=${current?.end} сейчас=$at " +
                 "первые=[$head] последние=[$tail]",
         )
-    }
-
-    /**
-     * Канал гида для канала каталога.
-     *
-     * Порядок тот же, что у списка каналов на главном экране: сохранённая связь → `epgId`
-     * канала → сопоставление по названию ([EpgProvider]). Раньше OSD, оверлей телепрограммы
-     * и оверлей каналов искали гид по-разному, и передачи расходились.
-     */
-    private suspend fun resolveEpg(channel: Channel): String? {
-        val links = runCatching { channelEpgStore.links() }.getOrDefault(emptyMap())
-        // Общий порядок поиска гида с проверкой подмены источника: переставший обновляться
-        // гид уступает свежему одноимённому только при совпадающей сетке.
-        return runCatching { epgProvider.epgId(channel, clock.instant()) }.getOrNull()
     }
 
     /** Режим кадра. */
@@ -361,13 +329,14 @@ class PlayerViewModel @Inject constructor(
         // Сначала только названия: панель не должна ждать гид. Архив известен сразу —
         // он приходит из плейлиста, а не из гида.
         emit(items.map { it.toRecentRef() })
-        val programmes = nowProgrammes(items)
+        // Тот же провайдер, что у главного экрана и оверлея «Каналы»: окно и сдвиг — в одном месте.
+        val programmes = epgProvider.current(channels = items, now = clock.instant())
         val logos = logoUrls(items)
         emit(
             items.map { channel ->
                 channel.toRecentRef(
                     logoUrl = channel.logoUrl?.takeIf { it.isNotBlank() } ?: logos[channel.id.value],
-                    programme = programmes[channel.id.value],
+                    programme = programmes[channel.id],
                 )
             },
         )
@@ -474,49 +443,22 @@ class PlayerViewModel @Inject constructor(
         )
     }
 
-    /** Передача, в которую попадает момент времени. */
-    private suspend fun programmeAt(channel: Channel, at: Instant): Programme? {
-        // Гид определяет общий провайдер: свой поиск по названию дублировал правило
-        // сопоставления и мог взять передачу другой станции.
-        val epgId = epgProvider.epgId(channel, at) ?: return null
-        return epgStore.programmes(
-            channelId = epgId,
-            from = at.minus(12, ChronoUnit.HOURS),
-            to = at.plus(12, ChronoUnit.HOURS),
-        ).firstOrNull { !it.start.isAfter(at) && it.end.isAfter(at) }
-    }
+    /**
+     * Передача на момент: и «сейчас», и архивный выбор.
+     *
+     * Сдвиг гида, окно поиска и границы передачи считает [NowProgrammeProvider] — то же место,
+     * что у списков каналов. Раньше архивная передача искалась без поправки на сдвиг, и в шапке
+     * плеера стояло другое название (замечание Александра 11.11.2026).
+     */
+    private suspend fun programmeAt(channel: Channel, at: Instant) = epgProvider.at(channel, at)
 
     /** Передача, которая идёт прямо сейчас по этому каналу. */
-    private suspend fun currentProgramme(channel: Channel): Programme? {
-        // Тот же гид и тот же сдвиг, что у списка каналов и экрана программы: иначе
-        // OSD показывал передачу, которой в эфире нет (замечание Александра 09.11.2026).
-        val epgId = resolveEpg(channel) ?: return null
-
-        val shiftSeconds = epgShiftSeconds(channel)
-        val at = clock.instant().minusSeconds(shiftSeconds)
-        val found = epgStore.programmes(
-            channelId = epgId,
-            from = at.minus(24, ChronoUnit.HOURS),
-            to = at.plus(24, ChronoUnit.HOURS),
-        ).firstOrNull { !it.start.isAfter(at) && it.end.isAfter(at) }
-        return if (found == null || shiftSeconds == 0L) {
-            found
-        } else {
-            // Время показываем с поправкой, как в списке каналов.
-            found.copy(
-                start = found.start.plusSeconds(shiftSeconds),
-                end = found.end.plusSeconds(shiftSeconds),
-            )
-        }
-    }
+    private suspend fun currentProgramme(channel: Channel) =
+        epgProvider.at(channel, clock.instant())
 
     /** Сдвиг гида канала в секундах: свой важнее общего (решение Александра 09.11.2026). */
-    private suspend fun epgShiftSeconds(channel: Channel): Long {
-        val own = settingsStore.epgShifts.first()[channel.id.value]
-        val hours = own ?: settingsStore.globalEpgShift.first()
-        return hours.toLong() * 60L * 60L
-    }
-
+    private suspend fun epgShiftSeconds(channel: Channel): Long =
+        epgProvider.shiftSeconds(channel.id.value)
     companion object {
         /** Ключ категории «Избранное» (совпадает с HomeViewModel.FAVORITES_ID). */
         private const val FAVORITES_CATEGORY = "\u0001favorites"
@@ -539,6 +481,9 @@ class PlayerViewModel @Inject constructor(
 
         /** Как часто обновляем передачу в OSD. */
         private const val PROGRAMME_TICK_MS = 20_000L
+
+        /** Как часто пересчитываем передачи в оверлеях, пока экран открыт. */
+        private const val CHANNEL_LIST_REFRESH_MS = 20_000L
     }
 
     /** Адрес архивного потока: провайдер ждёт `utc` (начало) и `lutc` (сейчас). */

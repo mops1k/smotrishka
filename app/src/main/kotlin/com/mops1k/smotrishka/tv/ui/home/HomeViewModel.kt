@@ -5,7 +5,6 @@ import androidx.lifecycle.viewModelScope
 import com.mops1k.smotrishka.tv.core.data.CatalogStore
 import com.mops1k.smotrishka.tv.core.data.ChannelEpgStore
 import com.mops1k.smotrishka.tv.core.data.EpgProvider
-import com.mops1k.smotrishka.tv.core.data.EpgStore
 import com.mops1k.smotrishka.tv.core.data.FavoritesStore
 import com.mops1k.smotrishka.tv.core.data.PlayerSettingsStore
 import com.mops1k.smotrishka.tv.core.data.RecentChannelsStore
@@ -23,7 +22,9 @@ import com.mops1k.smotrishka.tv.epg.EpgUpdater
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import com.mops1k.smotrishka.tv.ui.common.ChannelOrder
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,7 +48,7 @@ import javax.inject.Inject
  * списке, но без программы — пользователь видит честную разницу.
  *
  * @param catalogStore каталог каналов;
- * @param epgStore программа передач;
+ * @param epgProvider единственный вход к телепрограмме;
  * @param epgMatcher сопоставление каналов каталога и EPG;
  * @param settingsStore настройки (последняя категория, глубина архива);
  * @param favoritesStore избранные каналы;
@@ -60,7 +61,6 @@ import javax.inject.Inject
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val catalogStore: CatalogStore,
-    private val epgStore: EpgStore,
     private val channelEpgStore: ChannelEpgStore,
     private val settingsStore: PlayerSettingsStore,
     private val favoritesStore: FavoritesStore,
@@ -205,7 +205,7 @@ class HomeViewModel @Inject constructor(
         }
         // Страховка: если передачи изменились в обход загрузчика, перечитываем их после паузы.
         viewModelScope.launch {
-            epgStore.programmeCount
+            epgProvider.programmeCount
                 .debounce(EPG_SETTLE_MS)
                 .collect { refresh(force = true) }
         }
@@ -748,26 +748,16 @@ class HomeViewModel @Inject constructor(
 
     /** Телепрограмма канала для разворота. */
     private suspend fun scheduleFor(channel: Channel): List<ProgrammeRowUi> {
-        // Гид канала определяет общий вход провайдера: сохранённая связь → epgId канала →
-        // сопоставление по названию, с тем же выбором свежего источника, что у списка и плеера.
-        val epgId = epgProvider.epgId(channel, clock.instant()) ?: return emptyList()
         val now = clock.instant()
-        // Ручной сдвиг гида: время передач у канала сдвинуто относительно эфира.
-        val shift = secondsShift(channel)
-        val programmes = epgStore.programmes(
-            channelId = epgId,
+        // Сдвиг гида и окно считает провайдер — тот же вход, что у списка каналов и плеера.
+        val programmes = epgProvider.schedule(
+            channel = channel,
             from = now.minus(SCHEDULE_BACK_HOURS, ChronoUnit.HOURS),
             to = now.plus(SCHEDULE_FORWARD_HOURS, ChronoUnit.HOURS),
+            now = now,
         )
-        val shiftSeconds = secondsShift(channel)
-        // Сдвинутая сетка: статусы считаются по реальному «сейчас», а время — с поправкой.
-        val shifted = if (shiftSeconds == 0L) {
-            programmes
-        } else {
-            programmes.map { it.copy(start = it.start.plusSeconds(shiftSeconds), end = it.end.plusSeconds(shiftSeconds)) }
-        }
         return ProgrammeRows.build(
-            programmes = shifted,
+            programmes = programmes,
             now = now,
             channelHasArchive = channel.hasArchive(),
         )
@@ -906,7 +896,7 @@ class HomeViewModel @Inject constructor(
         // Подставляем иконку гида тем каналам, у которых своего логотипа нет.
         val channelsNeedingIcon = playlist.channels.filter { it.logoUrl.isNullOrBlank() }
         val epgIds = channelsNeedingIcon.mapNotNull { links[it.id] }.toSet()
-        val icons = runCatching { epgStore.icons(epgIds) }.getOrDefault(emptyMap())
+        val icons = epgProvider.epgIcons(epgIds)
         android.util.Log.d(
             "SmotrishkaHome",
             "логотипы: своих=${playlist.channels.count { !it.logoUrl.isNullOrBlank() }} " +
@@ -924,12 +914,24 @@ class HomeViewModel @Inject constructor(
                 }
             }
         }
+        // Передачу выбирает общий провайдер: окно и сдвиг гида любого знака — то же правило,
+        // что у оверлеев плеера (11.11.2026: оверлей каналов расходился с этим экраном).
         // Одна выборка на всё окно вместо запроса на каждый канал: иначе экран открывался
         // больше десяти секунд (проверено на приставке t950s_be311 05.11.2026).
-        val programmesByChannel = withTimeoutOrNull(EPG_READ_TIMEOUT_MS) {
-            epgStore.programmesByChannel(windowFrom, windowTo)
+        // Чтение идёт на Default: провайдер читает ещё и настройки сдвигов, а таймаут должен
+        // считаться по реальному времени, а не по часам тестового планировщика.
+        val programmes = withContext(Dispatchers.Default) {
+            withTimeoutOrNull(EPG_READ_TIMEOUT_MS) {
+                epgProvider.current(
+                    channels = playlist.channels,
+                    now = now,
+                    links = links,
+                    backHours = WINDOW_BACK_HOURS,
+                    forwardHours = WINDOW_FORWARD_HOURS,
+                )
+            }
         }.orEmpty()
-        if (programmesByChannel.isEmpty()) {
+        if (programmes.isEmpty()) {
             // Не «Программы нет»: гид мог просто не прочитаться из-за занятой базы
             // (идёт импорт). Показываем многоточие и повторим проход. Названия передач
             // из прошлого удачного прохода сохраняем: иначе после выхода из плеера
@@ -949,27 +951,20 @@ class HomeViewModel @Inject constructor(
                 epgPending = allChannels.isEmpty(),
             )
         }
-        mark("передачи ${programmesByChannel.size}")
+        mark("передачи ${programmes.size}")
         val withProgramme = catalogWithIcons.map { channel ->
-            // Связь из базы, а если её нет — epgId самого канала: иначе у части каналов
-            // программа видна в развороте, но в списке стоит «Программы нет».
-            val epgId = links[channel.id] ?: channel.epgId
-            if (epgId == null) {
+            // Передачи нет в ответе провайдера — значит гид её не знает: «Программы нет».
+            val programme = programmes[channel.id]
+            if (programme == null) {
                 ChannelUi(channel = channel, nowTitle = null, nextTitle = null)
             } else {
-                val programmes = programmesByChannel[epgId].orEmpty()
-                // Сдвиг гида канала: у части каналов провайдер отдаёт сетку со смещением.
-                val shiftSeconds = shiftHours(channel.id.value).toLong() * 60L * 60L
-                val at = now.minusSeconds(shiftSeconds)
-                val current = programmes.firstOrNull { !it.start.isAfter(at) && it.end.isAfter(at) }
-                val next = programmes.firstOrNull { it.start.isAfter(at) }
                 ChannelUi(
                     channel = channel,
-                    nowTitle = current?.title,
-                    nextTitle = next?.title,
-                    nowDescription = current?.description,
-                    nowStart = current?.start?.plusSeconds(shiftSeconds),
-                    nowEnd = current?.end?.plusSeconds(shiftSeconds),
+                    nowTitle = programme.title,
+                    nextTitle = programme.nextTitle,
+                    nowDescription = programme.description,
+                    nowStart = programme.start,
+                    nowEnd = programme.end,
                 )
             }
         }
