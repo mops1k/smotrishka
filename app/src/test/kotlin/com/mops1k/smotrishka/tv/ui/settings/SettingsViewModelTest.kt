@@ -170,7 +170,12 @@ class SettingsViewModelTest {
 
         viewModel.setBufferSeconds(10)
 
-        assertThat(viewModel.bufferSeconds.first { it == 10 }).isEqualTo(10)
+        // Поток настроек подписной (WhileSubscribed): без собирателя значение не обновится.
+        // Ждём в реальном времени — DataStore пишет вне виртуальных часов runTest.
+        val buffer = withContext(Dispatchers.Default) {
+            withTimeout(BUFFER_AWAIT_MS) { viewModel.bufferSeconds.first { it == 10 } }
+        }
+        assertThat(buffer).isEqualTo(10)
     }
 
     @Test
@@ -320,5 +325,8 @@ class SettingsViewModelTest {
     private companion object {
         /** Сколько реального времени ждём очистки ленты на диспетчере DataStore. */
         const val AWAIT_MS = 2_000L
+
+        /** Ожидание записи буфера в DataStore: реальное время, медленный раннер. */
+        const val BUFFER_AWAIT_MS = 10_000L
     }
 }
