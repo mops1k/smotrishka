@@ -50,6 +50,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalConfiguration
+import com.mops1k.smotrishka.tv.core.designsystem.component.TvWatchButton
+import com.mops1k.smotrishka.tv.core.designsystem.component.TvSecondaryButton
 import com.mops1k.smotrishka.tv.core.designsystem.component.TvButtonGradient
 import com.mops1k.smotrishka.tv.core.designsystem.component.TvCardProgressGradient
 import com.mops1k.smotrishka.tv.core.designsystem.component.tvFocusRing
@@ -189,17 +191,25 @@ fun ChannelCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Box(modifier = Modifier.weight(1f)) {
-                        WatchButton(onClick = onWatch, leftTarget = leftTarget)
+                        TvWatchButton(onClick = onWatch, leftTarget = leftTarget)
                     }
                     Box(modifier = Modifier.weight(1f)) {
                         if (schedule.isEmpty() && onOpenArchivePicker != null) {
-                            ProgrammeButton(
+                            TvSecondaryButton(
                                 onClick = onOpenArchivePicker,
-                                leftTarget = leftTarget,
                                 label = "Архив",
+                                icon = Icons.Filled.List,
+                                trailingIcon = Icons.Filled.ChevronRight,
+                                leftTarget = leftTarget,
                             )
                         } else {
-                            ProgrammeButton(onClick = onOpenProgramme, leftTarget = leftTarget)
+                            TvSecondaryButton(
+                                onClick = onOpenProgramme,
+                                label = "Программа",
+                                icon = Icons.Filled.List,
+                                trailingIcon = Icons.Filled.ChevronRight,
+                                leftTarget = leftTarget,
+                            )
                         }
                     }
                 }
@@ -235,7 +245,7 @@ fun ChannelCard(
             )
                 }
                     Spacer(Modifier.weight(1f))
-                    WatchButton(onClick = onWatch, compact = true)
+                    TvWatchButton(onClick = onWatch, compact = true)
                 }
                 Column(
                     modifier = Modifier
@@ -249,7 +259,13 @@ fun ChannelCard(
                             .verticalScroll(rememberScrollState()),
                     ) { copy() }
                     Spacer(Modifier.height(8.dp))
-                    ProgrammeButton(onClick = onOpenProgramme, compact = true)
+                    TvSecondaryButton(
+                        onClick = onOpenProgramme,
+                        label = "Программа",
+                        icon = Icons.Filled.List,
+                        trailingIcon = Icons.Filled.ChevronRight,
+                        compact = true,
+                    )
                 }
             }
         } else {
@@ -599,12 +615,12 @@ private fun CollapseButton(onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .heightIn(min = TvDimens.collapseButtonMinHeight)
+            .tvFocusRing(focused = focused, shape = shape)
             .clip(shape)
             .border(1.dp, TvColors.line, shape)
             .background(if (focused) TvColors.rowHover else Color.Transparent)
             .onFocusChanged { focused = it.isFocused }
             .clickable { onClick() }
-            .tvFocusRing(focused = focused, shape = shape)
             .focusable()
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -696,122 +712,6 @@ private fun NowBlock(
                 )
             }
         }
-    }
-}
-
-/**
- * Кнопка «Программа»: единственный вход в разворот телепрограммы.
- *
- * @param onClick развернуть телепрограмму.
- */
-@Composable
-private fun ProgrammeButton(
-    onClick: () -> Unit,
-    compact: Boolean = false,
-    leftTarget: FocusRequester? = null,
-    // Подпись кнопки: «Программа» либо «Архив», когда передач нет.
-    label: String = "Программа",
-) {
-    var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(TvRadius.control)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = if (compact) 38.dp else TvDimens.programmeButtonMinHeight)
-            .clip(shape)
-            .border(3.dp, if (focused) TvColors.focusOutline else TvColors.line, shape)
-            // Фокус — тёмная заливка с яркой обводкой: акцентная плашка сливалась с градиентом.
-            .background(if (focused) Color(0xFF05060A) else Color.Transparent)
-            .then(
-                if (leftTarget != null) Modifier.focusProperties { left = leftTarget } else Modifier,
-            )
-            .onFocusChanged { focused = it.isFocused }
-            .clickable { onClick() }
-            .tvFocusRing(focused = focused, shape = shape)
-            .focusable()
-            .padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Icon(
-            imageVector = Icons.Filled.List,
-            contentDescription = null,
-            tint = if (focused) TvColors.focusOutline else TvColors.accent,
-            modifier = Modifier.size(16.dp),
-        )
-        Text(
-            text = label,
-            style = if (compact) {
-                TvType.programmeButton.copy(fontSize = 11.sp)
-            } else {
-                TvType.programmeButton
-            },
-            maxLines = 1,
-            softWrap = false,
-            color = if (focused) TvColors.focusOutline else TvColors.programmeButtonText,
-            modifier = Modifier.weight(1f),
-        )
-        Icon(
-            imageVector = Icons.Filled.ChevronRight,
-            contentDescription = null,
-            tint = if (focused) TvColors.focusOutline else TvColors.nowLabel,
-            modifier = Modifier.size(16.dp),
-        )
-    }
-}
-
-/**
- * Кнопка «Смотреть»: градиент, круг с треугольником и текст 13/700.
- *
- * @param onClick открыть канал в плеере.
- */
-@Composable
-private fun WatchButton(
-    onClick: () -> Unit,
-    compact: Boolean = false,
-    leftTarget: FocusRequester? = null,
-) {
-    var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(TvRadius.item)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = if (compact) 38.dp else TvDimens.watchButtonMinHeight)
-            .clip(shape)
-            .background(TvButtonGradient)
-            .then(
-                if (leftTarget != null) Modifier.focusProperties { left = leftTarget } else Modifier,
-            )
-            .onFocusChanged { focused = it.isFocused }
-            .clickable { onClick() }
-            .tvFocusRing(focused = focused, shape = shape, color = TvColors.accent)
-            .focusable()
-            .padding(horizontal = if (compact) 6.dp else 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(if (compact) 20.dp else 28.dp)
-                .clip(CircleShape)
-                .background(Color(0x26FFFFFF)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Filled.PlayArrow,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(if (compact) 12.dp else 16.dp),
-            )
-        }
-        Spacer(Modifier.width(10.dp))
-        Text(
-            text = "Смотреть",
-            style = if (compact) TvType.watchButton.copy(fontSize = 10.5.sp) else TvType.watchButton,
-            color = Color.White,
-            maxLines = 1,
-            softWrap = false,
-        )
     }
 }
 

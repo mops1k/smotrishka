@@ -255,7 +255,6 @@ private fun ChannelOverlayRow(
             .onFocusChanged { focused = it.isFocused }
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .clickable { onClick() }
-            .focusable()
             .then(if (focused) Modifier.border(3.dp, TvColors.focusOutline, shape) else Modifier)
             .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {

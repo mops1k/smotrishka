@@ -142,6 +142,9 @@ dependencies {
     implementation(project(":core:data"))
     implementation(project(":core:playlist"))
     implementation(project(":core:model"))
+    // Медиатека: экраны работают только с доменом и use case-ами, адаптеры — за модулем данных.
+    implementation(project(":core:vod-domain"))
+    implementation(project(":core:vod-data"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

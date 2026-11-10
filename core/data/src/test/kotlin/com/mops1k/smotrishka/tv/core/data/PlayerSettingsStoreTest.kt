@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import com.mops1k.smotrishka.tv.core.data.AspectMode
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -39,6 +40,31 @@ class PlayerSettingsStoreTest {
     @After
     fun tearDown() {
         scope.cancel()
+    }
+
+    @Test
+    fun `режим кадра по умолчанию вписывает картинку`() = runTest {
+        assertThat(store.aspectMode("channel:1").first()).isEqualTo(AspectMode.FIT)
+    }
+
+    @Test
+    fun `режим кадра канала не влияет на другой канал`() = runTest {
+        store.setAspectMode("channel:1", AspectMode.STRETCH)
+
+        assertThat(store.aspectMode("channel:1").first()).isEqualTo(AspectMode.STRETCH)
+        assertThat(store.aspectMode("channel:2").first()).isEqualTo(AspectMode.FIT)
+    }
+
+    @Test
+    fun `без выбора у элемента действует общая настройка`() = runTest {
+        store.setAspectMode(AspectMode.CROP)
+
+        assertThat(store.aspectMode("channel:1").first()).isEqualTo(AspectMode.CROP)
+
+        store.setAspectMode("channel:1", AspectMode.ORIGINAL)
+
+        assertThat(store.aspectMode("channel:1").first()).isEqualTo(AspectMode.ORIGINAL)
+        assertThat(store.aspectMode("channel:2").first()).isEqualTo(AspectMode.CROP)
     }
 
     @Test

@@ -21,3 +21,7 @@ include(":core:model")
 include(":core:data")
 include(":core:playlist")
 include(":core:designsystem")
+
+// Контекст медиатеки (DDD): домен отдельно от адаптеров, зависимости строго внутрь.
+include(":core:vod-domain")
+include(":core:vod-data")

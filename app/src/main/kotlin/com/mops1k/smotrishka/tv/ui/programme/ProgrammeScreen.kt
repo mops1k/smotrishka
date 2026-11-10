@@ -180,7 +180,6 @@ private fun ProgrammeRow(item: ProgrammeUi, onClick: () -> Unit) {
             .clip(RoundedCornerShape(6.dp))
             .background(background)
             .clickable(enabled = item.inArchive) { onClick() }
-            .focusable()
             .padding(horizontal = 8.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

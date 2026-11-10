@@ -40,6 +40,12 @@ import com.mops1k.smotrishka.tv.ui.programme.ProgrammeScreen
 import com.mops1k.smotrishka.tv.ui.programme.ProgrammeViewModel
 import com.mops1k.smotrishka.tv.ui.settings.SettingsScreen
 import com.mops1k.smotrishka.tv.ui.shell.LocalUpdateBadge
+import com.mops1k.smotrishka.tv.ui.vod.VodCatalogScreen
+import com.mops1k.smotrishka.tv.ui.vod.VodFavoritesScreen
+import com.mops1k.smotrishka.tv.ui.vod.VodPlayerScreen
+import com.mops1k.smotrishka.tv.ui.vod.VodPlayerViewModel
+import com.mops1k.smotrishka.tv.ui.vod.VodTitleScreen
+import com.mops1k.smotrishka.tv.ui.vod.VodTitleViewModel
 import com.mops1k.smotrishka.tv.update.UpdateState
 
 /** Маршруты приложения. */
@@ -47,6 +53,40 @@ object Route {
     const val ONBOARDING = "onboarding"
     const val HOME = "home"
     const val SETTINGS = "settings"
+
+    /** Медиатека: отдельный раздел, виден только у проверенного портала. */
+    const val MEDIATEKA = "mediateka"
+
+    /** Карточка медиатеки: `vod/title/<id карточки>`. */
+    const val VOD_DETAIL = "vod/title/{titleId}"
+
+    /** Избранное медиатеки. */
+    const val VOD_FAVORITES = "vod/favorites"
+
+    /** VOD-плеер медиатеки: `vod/play/<id карточки>?episode=<id серии>&quality=<качество>`. */
+    const val VOD_PLAYER = "vod/play/{titleId}?episode={episode}&quality={quality}"
+
+    /**
+     * Собирает маршрут карточки медиатеки.
+     *
+     * @param titleId идентификатор карточки.
+     */
+    fun vodTitle(titleId: Int): String = "vod/title/$titleId"
+
+    /**
+     * Собирает маршрут VOD-плеера.
+     *
+     * @param titleId идентификатор карточки;
+     * @param episodeId выбранная серия, `null` — продолжение с сохранённого места;
+     * @param quality выбранное качество, `null` — «Авто».
+     */
+    fun vodPlayer(titleId: Int, episodeId: Int? = null, quality: String? = null): String {
+        val query = buildList {
+            episodeId?.let { add("episode=$it") }
+            quality?.let { add("quality=$it") }
+        }
+        return "vod/play/$titleId" + if (query.isEmpty()) "" else "?" + query.joinToString("&")
+    }
 
     /** «О приложении»: версия и обновление. */
     const val ABOUT = "about"
@@ -107,6 +147,9 @@ fun AppNavHost(
 
     val updateViewModel: UpdateViewModel = hiltViewModel()
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
+    // Ключ запроса раздела: меню «Медиатеки» передаёт его главному экрану.
+    val SECTION_REQUEST_KEY = "home-section-request"
+
     val available = updateState as? UpdateState.Available
     val updateBadge = available != null && !available.dismissed
 
@@ -156,7 +199,7 @@ fun AppNavHost(
                     )
                 }
 
-                composable(Route.HOME) {
+                composable(Route.HOME) { entry ->
                     HomeScreen(
                         onChannelOpen = { channelId -> navController.navigate(Route.player(channelId)) },
                         onOpenArchive = { channelId, start ->
@@ -164,7 +207,85 @@ fun AppNavHost(
                         },
                         onOpenSettings = { navController.navigate(Route.SETTINGS) },
                         onOpenAbout = { navController.navigate(Route.ABOUT) { launchSingleTop = true } },
+                        onOpenMediateka = {
+                            navController.navigate(Route.MEDIATEKA) { launchSingleTop = true }
+                        },
+                        onOpenVodFavorites = {
+                            navController.navigate(Route.VOD_FAVORITES) { launchSingleTop = true }
+                        },
+                        requestedSection = entry.savedStateHandle.get<String>(SECTION_REQUEST_KEY),
+                        onSectionRequestHandled = {
+                            entry.savedStateHandle.remove<String>(SECTION_REQUEST_KEY)
+                        },
                     )
+                }
+
+                composable(Route.VOD_FAVORITES) {
+                    VodFavoritesScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenTitle = { titleId -> navController.navigate(Route.vodTitle(titleId.value)) },
+                        onWatch = { titleId -> navController.navigate(Route.vodPlayer(titleId.value)) },
+                        onOpenSettings = {
+                            navController.navigate(Route.SETTINGS) { launchSingleTop = true }
+                        },
+                    )
+                }
+
+                composable(Route.MEDIATEKA) {
+                    VodCatalogScreen(
+                        onBack = { navController.backToHome() },
+                        // Пункты меню на этом экране открывают раздел главного, а не просто
+                        // закрывают «Медиатеку»: раньше «Избранное» приводило на «Телеканалы».
+                        onOpenSection = { destination ->
+                            runCatching {
+                                navController.getBackStackEntry(Route.HOME).savedStateHandle[
+                                    SECTION_REQUEST_KEY,
+                                ] = destination.name
+                            }
+                            navController.backToHome()
+                        },
+                        onOpenTitle = { titleId -> navController.navigate(Route.vodTitle(titleId.value)) },
+                        onWatch = { title -> navController.navigate(Route.vodPlayer(title.id.value)) },
+                        onOpenSettings = {
+                            navController.navigate(Route.SETTINGS) { launchSingleTop = true }
+                        },
+                    )
+                }
+
+                composable(
+                    route = Route.VOD_DETAIL,
+                    arguments = listOf(
+                        navArgument(VodTitleViewModel.ARG_TITLE_ID) { type = NavType.StringType },
+                    ),
+                ) {
+                    VodTitleScreen(
+                        onBack = { navController.popBackStack() },
+                        onWatch = { titleId, episodeId, quality ->
+                            navController.navigate(
+                                Route.vodPlayer(titleId.value, episodeId?.value, quality?.key),
+                            )
+                        },
+                        onOpenSettings = {
+                            navController.navigate(Route.SETTINGS) { launchSingleTop = true }
+                        },
+                    )
+                }
+
+                composable(
+                    route = Route.VOD_PLAYER,
+                    arguments = listOf(
+                        navArgument(VodPlayerViewModel.ARG_TITLE_ID) { type = NavType.StringType },
+                        navArgument(VodPlayerViewModel.ARG_EPISODE_ID) {
+                            type = NavType.StringType
+                            defaultValue = ""
+                        },
+                        navArgument(VodPlayerViewModel.ARG_QUALITY) {
+                            type = NavType.StringType
+                            defaultValue = ""
+                        },
+                    ),
+                ) {
+                    VodPlayerScreen(onBack = { navController.popBackStack() })
                 }
 
                 composable(

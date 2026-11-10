@@ -520,12 +520,12 @@ private fun SourceChip(title: String, active: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .heightIn(min = 40.dp)
+            .tvFocusRing(focused = focused, shape = shape)
             .clip(shape)
             .background(if (active) TvColors.categoryActiveBg else TvColors.panel)
             .border(1.dp, if (active) Color.Transparent else TvColors.line, shape)
             .onFocusChanged { focused = it.isFocused }
             .clickable { onClick() }
-            .tvFocusRing(focused = focused, shape = shape)
             .focusable()
             .padding(horizontal = 14.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
@@ -682,7 +682,6 @@ private fun OnboardingField(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
                         .clickable { onTogglePassword() }
-                        .focusable()
                         .padding(horizontal = 6.dp, vertical = 6.dp),
                 )
             }
@@ -756,12 +755,12 @@ private fun SecondaryButton(text: String, enabled: Boolean, onClick: () -> Unit)
     Box(
         modifier = Modifier
             .heightIn(min = 39.dp)
+            .tvFocusRing(focused = focused, shape = shape)
             .clip(shape)
             .background(TvColors.panel)
             .border(1.dp, if (focused) TvColors.accent.copy(alpha = 0.34f) else TvColors.line, shape)
             .onFocusChanged { focused = it.isFocused }
             .clickable(enabled = enabled) { onClick() }
-            .tvFocusRing(focused = focused, shape = shape)
             .focusable()
             .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
@@ -789,11 +788,11 @@ private fun SubmitButton(onClick: () -> Unit) {
                 ambientColor = Color(0xFF784EDE).copy(alpha = 0.22f),
                 spotColor = Color(0xFF784EDE).copy(alpha = 0.22f),
             )
+            .tvFocusRing(focused = focused, shape = shape, color = Color.White)
             .clip(shape)
             .background(TvButtonGradient)
             .onFocusChanged { focused = it.isFocused }
             .clickable { onClick() }
-            .tvFocusRing(focused = focused, shape = shape, color = Color.White)
             .focusable(),
         contentAlignment = Alignment.Center,
     ) {
@@ -832,12 +831,12 @@ private fun CancelButton(onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .heightIn(min = 44.dp)
+            .tvFocusRing(focused = focused, shape = shape)
             .clip(shape)
             .background(TvColors.panel)
             .border(1.dp, TvColors.line, shape)
             .onFocusChanged { focused = it.isFocused }
             .clickable { onClick() }
-            .tvFocusRing(focused = focused, shape = shape)
             .focusable()
             .padding(horizontal = 18.dp),
         contentAlignment = Alignment.Center,

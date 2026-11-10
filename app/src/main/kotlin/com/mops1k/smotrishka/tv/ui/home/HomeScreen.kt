@@ -1,5 +1,8 @@
 package com.mops1k.smotrishka.tv.ui.home
 
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.Text
+import com.mops1k.smotrishka.tv.core.designsystem.theme.TvType
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,8 +49,14 @@ import com.mops1k.smotrishka.tv.ui.home.components.ArchivePickerDialog
 import com.mops1k.smotrishka.tv.ui.home.components.CategoryPane
 import com.mops1k.smotrishka.tv.ui.home.components.ChannelCard
 import com.mops1k.smotrishka.tv.ui.home.components.ChannelListPanel
+import com.mops1k.smotrishka.tv.ui.home.components.FavoritesCategoryPicker
 import com.mops1k.smotrishka.tv.ui.search.SearchOverlay
+import com.mops1k.smotrishka.tv.ui.player.osd.OsdCircleButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import com.mops1k.smotrishka.tv.ui.common.BackArrowRow
 import com.mops1k.smotrishka.tv.ui.shell.AppShell
+import com.mops1k.smotrishka.tv.ui.vod.VodAvailabilityViewModel
 import com.mops1k.smotrishka.tv.ui.shell.ShellFocusTargets
 import com.mops1k.smotrishka.tv.ui.shell.rememberShellFocusTargets
 import androidx.compose.ui.platform.LocalConfiguration
@@ -68,6 +77,7 @@ import java.time.ZoneId
  * @param onOpenArchive открыть прошедшую передачу в архиве;
  * @param onOpenSettings открыть настройки;
  * @param onOpenAbout открыть «О приложении»;
+ * @param onOpenMediateka открыть медиатеку;
  * @param viewModel экранная модель.
  */
 @Composable
@@ -76,9 +86,29 @@ fun HomeScreen(
     onOpenArchive: (ChannelId, Instant) -> Unit = { _, _ -> },
     onOpenSettings: () -> Unit = {},
     onOpenAbout: () -> Unit = {},
+    onOpenMediateka: () -> Unit = {},
+    onOpenVodFavorites: () -> Unit = {},
+    // Раздел, в который нужно перейти по запросу из меню другого экрана.
+    requestedSection: String? = null,
+    onSectionRequestHandled: () -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+
+    // Меню на другом экране (например, в «Медиатеке») просит открыть раздел — переходим в него.
+    LaunchedEffect(requestedSection) {
+        val destination = requestedSection?.let { name ->
+            ShellDestination.entries.firstOrNull { it.name == name }
+        } ?: return@LaunchedEffect
+        when (destination) {
+            ShellDestination.SETTINGS -> onOpenSettings()
+            ShellDestination.ABOUT -> onOpenAbout()
+            else -> viewModel.selectSection(destination.toSection())
+        }
+        onSectionRequestHandled()
+    }
+    val availability: VodAvailabilityViewModel = hiltViewModel()
+    val vodConnected by availability.connected.collectAsStateWithLifecycle()
     val dataSaver by viewModel.dataSaver.collectAsStateWithLifecycle()
     val bufferSeconds by viewModel.bufferSeconds.collectAsStateWithLifecycle()
     val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
@@ -134,7 +164,19 @@ fun HomeScreen(
     // Окно «Архив» для каналов без программы передач, но с архивом.
     var archivePickerOpen by remember { mutableStateOf(false) }
 
+    // Избранное при подключённой медиатеке начинается с выбора категории: телеканалы или
+    // медиатека. Выбор запоминается на время сеанса экрана.
+    var favoritesChannelsChosen by remember { mutableStateOf(false) }
+    // Возврат из списка избранных каналов к выбору категорий: фокус — на плитке «Телеканалы».
+    val favoritesPickerFocus = remember { FocusRequester() }
+    val favoritesPickerScope = rememberCoroutineScope()
+
     val content = state as? HomeUiState.Content
+    // Выбор категорий избранного на экране: «вниз» с поиска и «вправо» из меню должны вести
+    // на плитки, а не на список каналов, которого на этом экране нет.
+    val favoritesPickerShown = vodConnected &&
+        !favoritesChannelsChosen &&
+        content?.section == HomeSection.FAVORITES
     val programmeOpen = content?.programmeOpen == true
 
     // Приоритет закрытия (`docs/design/flows.md`): поиск → разворот программы → система.
@@ -233,6 +275,7 @@ fun HomeScreen(
         menuFocusRequester = focusTargets.menu,
         // Из меню «вправо» — в видимую панель: категории, а когда их нет — список каналов.
         sidebarRightFocus = when {
+            favoritesPickerShown -> favoritesPickerFocus
             content?.section == HomeSection.TV && !content.showChannels -> focusTargets.categories
             content != null -> focusTargets.list
             else -> null
@@ -242,13 +285,16 @@ fun HomeScreen(
             when (destination) {
                 ShellDestination.SETTINGS -> onOpenSettings()
                 ShellDestination.ABOUT -> onOpenAbout()
+                ShellDestination.MEDIATEKA -> onOpenMediateka()
                 else -> viewModel.selectSection(destination.toSection())
             }
         },
         onSearch = { searchOpen = true },
         onSearchLeftEdge = activateMenu,
         searchFocusRequester = focusTargets.search,
-        searchDownFocusRequester = focusTargets.preview,
+        // «Вниз» с поиска ведёт на превью только там, где превью есть. На экранах без него
+        // (например, выбор категорий избранного) фокус идёт по геометрии.
+        searchDownFocusRequester = if (favoritesPickerShown) null else focusTargets.preview,
     ) {
         when (val current = state) {
             HomeUiState.Loading -> CenteredMessage("Загружаем каналы…")
@@ -262,6 +308,18 @@ fun HomeScreen(
                 bufferSeconds = bufferSeconds,
                 narrow = narrow,
                 compactCard = compactCard,
+                showVodFavoritesPicker = vodConnected && !favoritesChannelsChosen,
+                showFavoritesBack = vodConnected && favoritesChannelsChosen,
+                favoritesPickerFocus = favoritesPickerFocus,
+                onPickFavoritesChannels = { favoritesChannelsChosen = true },
+                onBackToFavoritesPicker = {
+                    favoritesChannelsChosen = false
+                    favoritesPickerScope.launch {
+                        withFrameNanos { }
+                        runCatching { favoritesPickerFocus.requestFocus() }
+                    }
+                },
+                onOpenVodFavorites = onOpenVodFavorites,
                 onSelectCategory = viewModel::selectCategory,
                 onSelectChannel = viewModel::selectChannel,
                 onToggleFavorite = viewModel::toggleFavorite,
@@ -383,6 +441,14 @@ private fun SectionContent(
     bufferSeconds: Int,
     narrow: Boolean,
     compactCard: Boolean,
+    // Избранное при подключённой медиатеке: сначала выбор категории.
+    showVodFavoritesPicker: Boolean = false,
+    // Стрелка «назад» из списка избранных каналов к выбору категорий.
+    showFavoritesBack: Boolean = false,
+    favoritesPickerFocus: FocusRequester? = null,
+    onPickFavoritesChannels: () -> Unit = {},
+    onBackToFavoritesPicker: () -> Unit = {},
+    onOpenVodFavorites: () -> Unit = {},
     onSelectCategory: (String?) -> Unit,
     onSelectChannel: (ChannelId) -> Unit,
     onToggleFavorite: (ChannelId) -> Unit,
@@ -405,6 +471,18 @@ private fun SectionContent(
     onChangeEpgShift: ((Int) -> Unit)? = null,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
+        // Избранное при подключённой медиатеке: две категории вместо сразу списка каналов.
+        if (content.section == HomeSection.FAVORITES && showVodFavoritesPicker) {
+            FavoritesCategoryPicker(
+                onChannels = onPickFavoritesChannels,
+                onMediateka = onOpenVodFavorites,
+                channelsFocus = favoritesPickerFocus,
+            )
+            return@Column
+        }
+        if (content.section == HomeSection.FAVORITES && showFavoritesBack) {
+            BackArrowRow(label = "Избранные телеканалы", onBack = onBackToFavoritesPicker)
+        }
         Row(
             modifier = Modifier.fillMaxSize(),
             horizontalArrangement = Arrangement.spacedBy(25.dp),
@@ -590,3 +668,4 @@ private fun CenteredMessage(text: String) {
 
 /** Как часто обновляем время на главном экране. */
 private const val HOME_TICK_MS = 20_000L
+

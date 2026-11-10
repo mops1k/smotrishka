@@ -33,6 +33,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -58,6 +63,7 @@ import com.mops1k.smotrishka.tv.core.designsystem.theme.TvType
  * @param current текущий раздел;
  * @param onSelect выбор раздела;
  * @param narrow узкий режим: подписи скрыты, пункты центрируются;
+ * @param showMediateka показывать ли пункт «Медиатека»: он есть только у проверенного портала;
  * @param modifier размеры сайдбара.
  *
  * Ширина меняется по фокусу: пока фокус вне меню, сайдбар свёрнут в иконки и не занимает
@@ -69,6 +75,8 @@ fun AppSidebar(
     onSelect: (ShellDestination) -> Unit,
     modifier: Modifier = Modifier,
     narrow: Boolean = false,
+    // Медиатека появляется в меню только после успешной проверки портала (решение 10.11.2026).
+    showMediateka: Boolean = false,
     // Пункты меню принимают фокус только когда меню активировано кнопкой «влево»:
     // иначе фокус-движок уводил в меню при движении вверх из карточки и списка.
     focusEnabled: Boolean = true,
@@ -81,6 +89,13 @@ fun AppSidebar(
 ) {
     // Фокус внутри меню (на нём самом или на пункте) — разворачиваем, иначе сворачиваем.
     var focusedInside by remember { mutableStateOf(false) }
+    // Адреса пунктов и текущий пункт под фокусом: «вверх»/«вниз» ходят по пунктам явно,
+    // геометрический поиск внутри меню не переключал их.
+    val itemRequesters = remember { ShellDestination.entries.associateWith { FocusRequester() } }
+    var focusedDestination by remember { mutableStateOf<ShellDestination?>(null) }
+    val visibleDestinations = ShellDestination.entries.filter {
+        it != ShellDestination.MEDIATEKA || showMediateka
+    }
     val collapsed = narrow || !focusedInside
     val targetWidth = if (collapsed) TvDimens.sidebarWidthNarrow else TvDimens.sidebarWidth
     // На слабых приставках ширина меняется мгновенно: анимация отнимала кадры у пульта.
@@ -101,6 +116,19 @@ fun AppSidebar(
                     end = Offset(size.width, size.height),
                     strokeWidth = 1.dp.toPx(),
                 )
+            }
+            .onPreviewKeyEvent { event ->
+                if (!focusEnabled || event.type != KeyEventType.KeyDown) {
+                    return@onPreviewKeyEvent false
+                }
+                val index = visibleDestinations.indexOf(focusedDestination)
+                val target = when (event.key) {
+                    Key.DirectionDown -> visibleDestinations.getOrNull(index + 1)
+                    Key.DirectionUp -> visibleDestinations.getOrNull(index - 1)
+                    else -> null
+                } ?: return@onPreviewKeyEvent false
+                runCatching { itemRequesters[target]?.requestFocus() }
+                true
             }
             .padding(
                 start = if (collapsed) 10.dp else 20.dp,
@@ -123,13 +151,19 @@ fun AppSidebar(
                     runCatching { currentRequester.requestFocus() }
                 }
             }
-            ShellDestination.entries.forEach { destination ->
+            visibleDestinations
+                .forEach { destination ->
                 MenuItem(
                     destination = destination,
                     active = destination == current,
                     narrow = collapsed,
                     focusEnabled = focusEnabled,
-                    focusRequester = if (destination == current) currentRequester else null,
+                    focusRequester = if (destination == current) {
+                        currentRequester
+                    } else {
+                        itemRequesters[destination]
+                    },
+                    onFocused = { focused -> focusedDestination = destination.takeIf { focused } },
                     // «Вправо» из меню ведёт в видимую панель контента, а не «в никуда»:
                     // раньше первый шаг вправо попадал на скрытый элемент (замечание
                     // Александра 09.11.2026).
@@ -193,6 +227,8 @@ private fun MenuItem(
     rightFocus: FocusRequester? = null,
     // Есть обновление: точка акцента на иконке.
     badge: Boolean = false,
+    // Сообщает меню, что пункт получил или потерял фокус.
+    onFocused: (Boolean) -> Unit = {},
 ) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(TvRadius.item)
@@ -233,7 +269,10 @@ private fun MenuItem(
                     )
                 }
             }
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged {
+                focused = it.isFocused
+                onFocused(it.isFocused)
+            }
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             // Пока меню не активировано «влево», пункт не участвует в поиске фокуса.
             .focusProperties {
@@ -242,10 +281,12 @@ private fun MenuItem(
                 // и требовалось второе нажатие (замечание Александра 09.11.2026).
                 if (rightFocus != null) right = rightFocus
             }
+            .focusProperties {
+                canFocus = focusEnabled
+            }
             .clickable { onClick() }
             .tvFocusRing(focused = focused, shape = shape)
             .then(if (focused) Modifier.border(3.dp, TvColors.focusOutline, shape) else Modifier)
-            .focusable()
             .padding(horizontal = if (narrow) 0.dp else 15.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = if (narrow) Arrangement.Center else Arrangement.Start,

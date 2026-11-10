@@ -198,6 +198,8 @@ fun SettingsScreen(
                         },
                     )
                     Spacer(Modifier.height(17.dp))
+                    VodSettingsCard()
+                    Spacer(Modifier.height(17.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(17.dp)) {
                         PlaybackCard(
                             bufferSeconds = bufferSeconds,
@@ -543,7 +545,7 @@ private fun InterfaceCard(
         SettingsRow(
             title = "Размер шрифта",
             value = fontScaleLabel(fontScale),
-            hint = "Меняет все тексты приложения; меню плеера не масштабируется",
+            hint = "Меняет все тексты приложения, включая меню плеера; кнопки плеера не растут",
         )
         val choices = PlayerSettingsStore.FONT_SCALE_CHOICES
         val selectedRequester = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -787,9 +789,11 @@ private fun PlayerCard(
                     onPick = { index -> onOsdHide(PlayerSettingsStore.OSD_HIDE_CHOICES[index]) },
                 )
                 SettingsRow(
-                    title = "Режим кадра",
+                    title = "Режим кадра по умолчанию",
                     value = aspectModeLabel,
-                    hint = "Что делать с картинкой, если пропорции не совпадают",
+                    // Режим, выбранный в плеере, хранится у канала или карточки отдельно.
+                    hint = "Для каналов и карточек без своего выбора; в плеере режим меняется " +
+                        "только у текущего",
                 )
                 ChoiceGroup(
                     options = aspectOptions.map { it to (it == aspectModeLabel) },
@@ -828,7 +832,7 @@ private fun PlayerCard(
  * @param content строки настроек.
  */
 @Composable
-private fun SettingsCard(
+internal fun SettingsCard(
     icon: ImageVector,
     iconTint: Color,
     iconBackground: Color,
@@ -882,7 +886,7 @@ private fun SettingsCard(
  * @param hint подсказка под строкой.
  */
 @Composable
-private fun SettingsRow(
+internal fun SettingsRow(
     title: String,
     value: String? = null,
     action: String? = null,
@@ -942,11 +946,11 @@ private fun ActionText(text: String, onClick: () -> Unit) {
     val shape = RoundedCornerShape(TvRadius.choice)
     Box(
         modifier = Modifier
+            .tvFocusRing(focused = focused, shape = shape)
             .clip(shape)
             .background(if (focused) TvColors.accent.copy(alpha = 0.16f) else Color.Transparent)
             .onFocusChanged { focused = it.isFocused }
             .clickable { onClick() }
-            .tvFocusRing(focused = focused, shape = shape)
             .focusable()
             .padding(horizontal = 8.dp, vertical = 4.dp),
     ) {
@@ -1074,10 +1078,10 @@ private fun ToggleRow(title: String, hint: String, checked: Boolean, onToggle: (
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .tvFocusRing(focused = focused, shape = shape)
             .clip(shape)
             .onFocusChanged { focused = it.isFocused }
             .clickable { onToggle(!checked) }
-            .tvFocusRing(focused = focused, shape = shape)
             .focusable()
             .padding(top = 17.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1158,7 +1162,6 @@ private fun GuideItem(guide: EpgGuide, onRemove: () -> Unit) {
             modifier = Modifier
                 .clip(RoundedCornerShape(8.dp))
                 .clickable { onRemove() }
-                .focusable()
                 .padding(horizontal = 6.dp, vertical = 4.dp),
         )
     }

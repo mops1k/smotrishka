@@ -318,8 +318,10 @@ class PlayerViewModel @Inject constructor(
         )
     }
 
-    /** Режим кадра. */
-    val aspectMode: Flow<AspectMode> = settingsStore.aspectMode
+    /** Режим кадра этого канала: у каждого канала свой, по умолчанию — общая настройка. */
+    /** Ключ режима кадра: канал хранит свой режим отдельно от остальных. */
+    private val aspectItemKey: String = "channel:$channelId"
+    val aspectMode: Flow<AspectMode> = settingsStore.aspectMode(aspectItemKey)
 
     /** Недавние каналы: свежие первыми, с текущей передачей и её описанием, как в списке каналов. */
     val recents: Flow<List<RecentChannelRef>> = recentChannels.channels.transform { ids ->
@@ -364,8 +366,9 @@ class PlayerViewModel @Inject constructor(
 
     /** Переключает режим кадра по кругу и запоминает выбор. */
     fun cycleAspectMode(current: AspectMode) {
-        viewModelScope.launch { settingsStore.setAspectMode(AspectModes.next(current)) }
+        viewModelScope.launch { settingsStore.setAspectMode(aspectItemKey, AspectModes.next(current)) }
     }
+
 
     /** Режим эфира: прямой поток провайдера или собственный буфер. */
     val directStream: kotlinx.coroutines.flow.Flow<Boolean> = settingsStore.directStream

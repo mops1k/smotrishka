@@ -133,6 +133,10 @@ import com.mops1k.smotrishka.tv.ui.home.ProgrammeRowUi
 import com.mops1k.smotrishka.tv.ui.home.ProgrammeStatus
 import com.mops1k.smotrishka.tv.ui.player.osd.ChannelListOverlay
 import com.mops1k.smotrishka.tv.ui.player.osd.OsdCircleButton
+import com.mops1k.smotrishka.tv.ui.player.osd.PlayerOsdButtons
+import com.mops1k.smotrishka.tv.ui.player.osd.PlayerSeekBar
+import com.mops1k.smotrishka.tv.ui.player.osd.rememberPlayerOsdFocus
+import com.mops1k.smotrishka.tv.ui.player.osd.rememberPlayerClockText
 import com.mops1k.smotrishka.tv.ui.player.osd.PlayerOsdTop
 import com.mops1k.smotrishka.tv.ui.player.osd.RecentsOverlay
 import kotlinx.coroutines.Job
@@ -361,19 +365,8 @@ private fun PlayerContent(
     LaunchedEffect(channelsVisible, recentsVisible, programmeVisible) {
         if (channelsVisible || recentsVisible || programmeVisible) controls.hideOsd()
     }
-    // Фокус в OSD при открытии: иначе он остаётся на плеере и кнопки не работают.
-    val osdFirstFocus = remember { FocusRequester() }
-    LaunchedEffect(controlsState.osdVisible) {
-        if (!controlsState.osdVisible) return@LaunchedEffect
-        // Несколько попыток: OSD появляется через AnimatedVisibility, и первая заявка
-        // на фокус может прийти до того, как кнопка попадёт в композицию.
-        repeat(8) {
-            if (osdFocused) return@LaunchedEffect
-            withFrameNanos { }
-            runCatching { osdFirstFocus.requestFocus() }
-            delay(60)
-        }
-    }
+    // Фокус меню плеера — общий компонент с медиатекой: одно правило для обоих плееров.
+    val osdFocus = rememberPlayerOsdFocus(controlsState.osdVisible)
     val buffer = remember(bufferSeconds) { PlayerBuffer(bufferSeconds) }
 
     // Восстановление потока не заканчивается само: счётчик нужен для паузы и для счётчика
@@ -587,14 +580,8 @@ private fun PlayerContent(
     // Индикатор качества: видно, хватает ли сети и сколько буфера в запасе.
     var stats by remember { mutableStateOf("") }
 
-    // Текущее время в правом верхнем углу OSD, без секунд.
-    var clock by remember { mutableStateOf(currentClockText()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            clock = currentClockText()
-            delay(CLOCK_REFRESH_MS)
-        }
-    }
+    // Текущее время в правом верхнем углу OSD, без секунд — из общего для плееров источника.
+    val clock = rememberPlayerClockText()
     LaunchedEffect(player, controlsState.osdVisible) {
         if (player == null) return@LaunchedEffect
         while (controlsState.osdVisible) {
@@ -865,7 +852,7 @@ private fun PlayerContent(
     // Пульт: Compose рассылает клавиши только по цепочке фокуса. Пока на экране нет ни
     // одного сфокусированного элемента, onPreviewKeyEvent ниже не вызывается вовсе —
     // отсюда были «мёртвые» ОК и стрелки при работающей кнопке «назад» (её ловит навигация).
-    val rootFocus = remember { FocusRequester() }
+    val rootFocus = osdFocus.surface
 
     // Фокус живёт на корне, пока не открыт OSD или панели: иначе пульт перестаёт
     // доходить до обработчика клавиш (например, после закрытия списка каналов).
@@ -939,7 +926,7 @@ private fun PlayerContent(
                 // OSD открыт, но фокус остался на плеере: переводим его внутрь OSD,
                 // иначе крестовина и OK «не отзываются».
                 if (controlsState.osdVisible && !osdFocused && !channelsVisible && !recentsVisible) {
-                    runCatching { osdFirstFocus.requestFocus() }
+                    runCatching { osdFocus.play.requestFocus() }
                 }
                 // Любое действие пультом при открытом OSD сбрасывает таймер автоскрытия:
                 // раньше счёт шёл от открытия меню, и оно гасло прямо во время навигации.
@@ -1413,7 +1400,6 @@ private fun PlayerContent(
             ) {
                 // Меню плеера не масштабируется вместе с интерфейсом (решение 09.11.2026);
                 // списки каналов и программы вне этой обёртки — они масштабируются.
-                WithoutFontScale {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -1474,7 +1460,7 @@ private fun PlayerContent(
                             color = Color.White.copy(alpha = 0.85f),
                         )
                         Spacer(Modifier.height(4.dp))
-                        ProgrammeSeekBar(
+                        PlayerSeekBar(
                             fraction = fraction,
                             onSeek = { fraction ->
                                 val targetOffset = (fraction * durationMs).toLong()
@@ -1527,9 +1513,6 @@ private fun PlayerContent(
                                     )?.let(player::seekTo)
                                 }
                             },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(SEEK_BAR_HEIGHT),
                         )
                         seekHint?.let { hint ->
                             Text(
@@ -1542,38 +1525,17 @@ private fun PlayerContent(
 
                     Spacer(Modifier.height(8.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        // Нижние кнопки — тот же OsdCircleButton, что и в верхней панели:
-                        // у стандартных IconButton наше оформление фокуса не работало.
-                        OsdCircleButton(
-                            icon = Icons.Filled.Replay10,
-                            contentDescription = "Назад на 10 секунд",
-                            onClick = { seekBy(player, -SEEK_STEP_MS) },
-                        )
-
-                        OsdCircleButton(
-                            icon = if (controlsState.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                            contentDescription = if (controlsState.playing) "Пауза" else "Играть",
-                            onClick = { togglePlayback(player, controls) },
-                            // Фокус при открытии OSD — на этой кнопке.
-                            focusRequester = osdFirstFocus,
-                            size = PLAY_BUTTON_SIZE,
-                        )
-
-                        OsdCircleButton(
-                            icon = Icons.Filled.Forward10,
-                            contentDescription = "Вперёд на 10 секунд",
-                            onClick = { seekBy(player, SEEK_STEP_MS) },
-                        )
-
-                        OsdCircleButton(
-                            icon = if (controlsState.muted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp,
-                            contentDescription = if (controlsState.muted) "Включить звук" else "Выключить звук",
-                            onClick = { toggleSound(player, controls) },
+                    // Кнопки не масштабируются вместе с текстом: подписи не должны вылезать
+                    // из кружков при большом размере шрифта.
+                    WithoutFontScale {
+                        PlayerOsdButtons(
+                            playing = controlsState.playing,
+                            onSeekBack = { seekBy(player, -SEEK_STEP_MS) },
+                            onTogglePlay = { togglePlayback(player, controls) },
+                            onSeekForward = { seekBy(player, SEEK_STEP_MS) },
+                            muted = controlsState.muted,
+                            onToggleSound = { toggleSound(player, controls) },
+                            focusRequester = osdFocus.play,
                         )
                     }
 
@@ -1588,117 +1550,11 @@ private fun PlayerContent(
                         )
                     }
                 }
-                }
             }
         }
     }
 }
 
-/**
- * Полоса перемотки по передаче: касание в точку перематывает поток.
- *
- * @param fraction доля прошедшего времени передачи, 0…1;
- * @param onSeek выбор новой доли;
- * @param modifier размеры полосы.
- */
-@Composable
-private fun ProgrammeSeekBar(
-    fraction: Float,
-    onSeek: (Float) -> Unit,
-    onSeekBy: (Long) -> Unit = {},
-    onPreview: (Float) -> Unit = {},
-    modifier: Modifier = Modifier,
-) {
-    var widthPx by remember { mutableStateOf(1f) }
-    // Фокус на полосе: без явного оформления с пульта не видно, что перемотка «в руках».
-    var focused by remember { mutableStateOf(false) }
-
-    // Вся высота блока — зона касания пальцем; сама полоса тонкая и рисуется по центру.
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(SEEK_BAR_TOUCH_HEIGHT)
-            .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
-            // Пульт: полоса получает фокус, влево/вправо перематывают на шаг.
-            .onFocusChanged { focused = it.isFocused }
-            .focusable()
-            .onKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
-                when (event.key) {
-                    Key.DirectionLeft -> { onSeekBy(-SEEK_STEP_MS); true }
-                    Key.DirectionRight -> { onSeekBy(SEEK_STEP_MS); true }
-                    else -> false
-                }
-            }
-            // Палец: касание перематывает сразу, перетаскивание — с предпросмотром.
-            .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    onSeek((offset.x / widthPx).coerceIn(0f, 1f))
-                }
-            }
-            .pointerInput(Unit) {
-                var last = fraction
-                detectDragGestures(
-                    onDragStart = { offset ->
-                        last = (offset.x / widthPx).coerceIn(0f, 1f)
-                        onPreview(last)
-                    },
-                    onDragEnd = { onSeek(last) },
-                    onDragCancel = { onSeek(last) },
-                ) { change, _ ->
-                    change.consume()
-                    last = (change.position.x / widthPx).coerceIn(0f, 1f)
-                    onPreview(last)
-                }
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        // Дорожка: тонкая, но по всей ширине. В фокусе она акцентная и выше — видно издалека.
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(if (focused) SEEK_BAR_FOCUSED_HEIGHT else SEEK_BAR_HEIGHT)
-                .clip(RoundedCornerShape(4.dp))
-                .background(
-                    if (focused) {
-                        TvColors.accent.copy(alpha = 0.45f)
-                    } else {
-                        Color.White.copy(alpha = 0.35f)
-                    },
-                )
-                .then(if (focused) Modifier.border(2.dp, TvColors.focusOutline, RoundedCornerShape(4.dp)) else Modifier),
-        )
-        // Заполненная часть.
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .fillMaxWidth(fraction)
-                .height(if (focused) SEEK_BAR_FOCUSED_HEIGHT else SEEK_BAR_HEIGHT)
-                .clip(RoundedCornerShape(4.dp))
-                .background(if (focused) TvColors.accent else Color.White),
-        )
-        // Кружок текущего момента: за него тянут полосу, как в плеерах на телефоне.
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .offset {
-                    val size = if (focused) THUMB_FOCUSED_SIZE else THUMB_SIZE
-                    IntOffset((fraction * widthPx - size.toPx() / 2f).toInt(), 0)
-                }
-                .size(if (focused) THUMB_FOCUSED_SIZE else THUMB_SIZE)
-                .clip(CircleShape)
-                .background(if (focused) TvColors.accent else Color.White)
-                // Светлая обводка: кружок должен читаться и на светлом кадре.
-                .then(
-                    if (focused) {
-                        Modifier.border(2.dp, Color.White, CircleShape)
-                    } else {
-                        Modifier
-                    },
-                ),
-        )
-    }
-}
 
 /**
  * Живой кадр канала для превью: видео со звуком, без органов управления.
@@ -1843,6 +1699,9 @@ fun LivePreview(
 /**
  * Создаёт настроенный ExoPlayer.
  *
+ * Сам билдер живёт в [PlayerEngine]: им пользуется и VOD-плеер медиатеки, чтобы буфер, повторы
+ * и ограничение качества не разъезжались между живым эфиром и записью.
+ *
  * @param context контекст;
  * @param url адрес потока;
  * @param buffer параметры буфера из настроек.
@@ -1855,60 +1714,14 @@ private fun buildPlayer(
     quality: VideoQuality = VideoQuality.AUTO,
     live: Boolean = true,
     startPositionMs: Long = 0L,
-): ExoPlayer {
-    val dataSourceFactory = OkHttpDataSource.Factory(PlayerHttp.client)
-
-    val activityManager = context.getSystemService(android.content.Context.ACTIVITY_SERVICE)
-        as? android.app.ActivityManager
-    val lowRam = activityManager?.isLowRamDevice == true
-
-    val loadControl = DefaultLoadControl.Builder()
-        .setBufferDurationsMs(
-            buffer.minBufferMs,
-            buffer.maxBufferMs,
-            buffer.forPlaybackMs,
-            buffer.forPlaybackAfterRebufferMs,
-        )
-        // Потолок по байтам: при достижении плеер выбрасывает старые сегменты, а не копит их.
-        .setTargetBufferBytes(PlayerMemory.targetBufferBytes(lowRam))
-        .setPrioritizeTimeOverSizeThresholds(false)
-        .build()
-
-    val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
-        .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(LOAD_RETRIES))
-
-    val trackSelector = DefaultTrackSelector(context).also { PlayerQuality.apply(it, quality) }
-
-    // Расширения (FFmpeg-декодер) включаются, когда аппаратного декодера нет:
-    // каналы с AC-3 иначе молчат на устройствах без поддержки этого кодека.
-    val renderersFactory = DefaultRenderersFactory(context)
-        .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-
-    return ExoPlayer.Builder(context)
-        .setRenderersFactory(renderersFactory)
-        .setMediaSourceFactory(mediaSourceFactory)
-        .setLoadControl(loadControl)
-        .setTrackSelector(trackSelector)
-        .build()
-        .apply {
-            // Диагностика Media3: выбранные дорожки, инициализация кодеков, первый кадр, ошибки.
-            // Нужна на слабых приставках, где «Загрузка…» висит без явной ошибки.
-            addAnalyticsListener(EventLogger())
-        }
-        .apply {
-            // Живой отступ нужен только сетевому потоку; для локального сегмента он включает
-            // «живой» режим и плеер бесконечно буферизуется.
-            // Архив — не эфир: live-конфигурация заставляла плеер прыгать к «краю» окна.
-            val item = if (url.startsWith("file://") || !live) {
-                MediaItem.fromUri(url)
-            } else {
-                PlayerLive.mediaItem(url)
-            }
-            setMediaItem(item, if (live) 0L else startPositionMs)
-            prepare()
-            playWhenReady = true
-        }
-}
+): ExoPlayer = PlayerEngine.build(
+    context = context,
+    url = url,
+    buffer = buffer,
+    quality = quality,
+    live = live,
+    startPositionMs = startPositionMs,
+)
 
 /** Переключает паузу и сообщает логике OSD новое намерение. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -1981,24 +1794,11 @@ private val SWIPE_THRESHOLD = 60.dp
 
 private const val SEEK_STEP_MS = 10_000L
 
-/** Размер центральной кнопки «пауза / играть». */
-private val PLAY_BUTTON_SIZE = 64.dp
-
 /** Сколько раз плеер повторит загрузку сегмента, прежде чем показать ошибку. */
 private const val LOAD_RETRIES = 6
 
 /** Как часто обновляется индикатор качества в OSD. */
 private const val STATS_REFRESH_MS = 1_000L
-
-/** Толщина полосы перемотки по передаче. */
-/** Высота зоны касания полосы прогресса. */
-/** Высота зоны касания полосы прогресса: под палец, а не под толщину полосы. */
-private val SEEK_BAR_TOUCH_HEIGHT = 48.dp
-
-private val SEEK_BAR_HEIGHT = 6.dp
-
-/** Высота дорожки в фокусе: по ней видно, что перемотка доступна с пульта. */
-private val SEEK_BAR_FOCUSED_HEIGHT = 12.dp
 
 /** Сколько секунд назад ещё считается «живым» эфиром без архива. */
 private const val LIVE_WINDOW_SECONDS = 60L
@@ -2109,9 +1909,6 @@ private const val MEGABYTE = 1024L * 1024
 private const val RETRY_TICK_MS = 200L
 
 /** Текущее время без секунд для правого верхнего угла OSD. */
-private fun currentClockText(): String =
-    java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
-
 /**
  * Поверхность видео на `TextureView`.
  *

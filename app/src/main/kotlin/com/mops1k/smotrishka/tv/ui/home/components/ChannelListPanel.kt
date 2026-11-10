@@ -152,10 +152,10 @@ private fun BackToCategories(onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .size(28.dp)
+            .tvFocusRing(focused = focused, shape = shape)
             .clip(shape)
             .onFocusChanged { focused = it.isFocused }
             .clickable { onClick() }
-            .tvFocusRing(focused = focused, shape = shape)
             .focusable(),
         contentAlignment = Alignment.Center,
     ) {

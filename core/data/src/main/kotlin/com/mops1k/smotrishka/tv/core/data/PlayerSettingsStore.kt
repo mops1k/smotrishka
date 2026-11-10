@@ -313,6 +313,23 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
             ?: AspectMode.FIT
     }
 
+    /**
+     * Режим кадра для конкретного элемента: канала или карточки медиатеки.
+     *
+     * Значение элемента важнее общего: выбранный режим влияет только на этот канал,
+     * фильм или сериал. Если для элемента ничего не выбирали, действует общая настройка,
+     * а она по умолчанию — вписывание в экран без растяжения.
+     *
+     * @param itemKey идентификатор элемента (`channel:<id>` или `vod:<id>`).
+     */
+    fun aspectMode(itemKey: String): Flow<AspectMode> = dataStore.data.map { preferences ->
+        preferences[aspectModeKey(itemKey)]
+            ?.let { name -> AspectMode.entries.firstOrNull { it.name == name } }
+            ?: preferences[ASPECT_MODE_KEY]
+                ?.let { name -> AspectMode.entries.firstOrNull { it.name == name } }
+            ?: AspectMode.FIT
+    }
+
     /** Режим эфира: прямой поток провайдера или собственный буфер (локальный HLS). */
     val directStream: Flow<Boolean> = dataStore.data.map { preferences ->
         preferences[DIRECT_STREAM_KEY] ?: true
@@ -459,6 +476,16 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
     }
 
     /**
+     * Сохраняет режим кадра для конкретного элемента.
+     *
+     * @param itemKey идентификатор элемента (`channel:<id>` или `vod:<id>`);
+     * @param mode выбранный режим.
+     */
+    suspend fun setAspectMode(itemKey: String, mode: AspectMode) {
+        dataStore.edit { preferences -> preferences[aspectModeKey(itemKey)] = mode.name }
+    }
+
+    /**
      * Сохраняет режим эфира.
      *
      * @param direct `true` — прямой поток провайдера, `false` — собственный буфер.
@@ -570,6 +597,9 @@ class PlayerSettingsStore(private val dataStore: DataStore<Preferences>) {
         private val ARCHIVE_DEPTH_KEY = intPreferencesKey("archive_depth_hours")
         private val DIRECT_STREAM_KEY = booleanPreferencesKey("direct_stream")
         private val ASPECT_MODE_KEY = stringPreferencesKey("aspect_mode")
+
+        /** Ключ режима кадра конкретного элемента: канала или карточки медиатеки. */
+        private fun aspectModeKey(itemKey: String) = stringPreferencesKey("aspect:$itemKey")
         private val BUFFERED_CHANNELS_KEY = stringSetPreferencesKey("buffered_channels_v2")
         private val UNSTABLE_CHANNELS_KEY = stringSetPreferencesKey("unstable_channels")
         private val ARCHIVE_VERIFIED_KEY = stringSetPreferencesKey("archive_verified")

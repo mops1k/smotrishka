@@ -73,15 +73,15 @@ fun PlayerOsdTop(
     programmeTitle: String?,
     isArchive: Boolean,
     clock: String,
-    favorite: Boolean,
-    aspectIcon: ImageVector,
-    aspectLabel: String,
+    favorite: Boolean = false,
+    aspectIcon: ImageVector? = null,
+    aspectLabel: String? = null,
     onBack: () -> Unit,
-    onGoLive: () -> Unit,
-    onOpenProgramme: () -> Unit,
-    onToggleFavorite: () -> Unit,
-    onOpenRecents: () -> Unit,
-    onCycleAspect: () -> Unit,
+    onGoLive: (() -> Unit)? = null,
+    onOpenProgramme: (() -> Unit)? = null,
+    onToggleFavorite: (() -> Unit)? = null,
+    onOpenRecents: (() -> Unit)? = null,
+    onCycleAspect: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     // Фокус при открытии OSD: без него пульт остаётся на плеере, и кнопки «не реагируют».
     initialFocus: FocusRequester? = null,
@@ -106,16 +106,17 @@ fun PlayerOsdTop(
                         color = TvColors.playerArchive,
                     )
                     Spacer(Modifier.width(12.dp))
-                    Text(
-                        text = "В эфир",
-                        style = TvType.rowProgramme.copy(fontWeight = FontWeight.SemiBold),
-                        color = Color.White,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable { onGoLive() }
-                            .focusable()
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
-                    )
+                    if (onGoLive != null) {
+                        Text(
+                            text = "В эфир",
+                            style = TvType.rowProgramme.copy(fontWeight = FontWeight.SemiBold),
+                            color = Color.White,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { onGoLive() }
+                                .padding(horizontal = 4.dp, vertical = 2.dp),
+                        )
+                    }
                 }
             }
             Text(
@@ -139,28 +140,36 @@ fun PlayerOsdTop(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
-            OsdCircleButton(
-                icon = Icons.AutoMirrored.Filled.List,
-                contentDescription = "Программа канала",
-                onClick = onOpenProgramme,
-            )
-            OsdCircleButton(
-                icon = if (favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                contentDescription = "Избранное",
-                onClick = onToggleFavorite,
-                tint = if (favorite) TvColors.favorite else Color.White,
-                active = favorite,
-            )
-            OsdCircleButton(
-                icon = Icons.Filled.DateRange,
-                contentDescription = "Недавние каналы",
-                onClick = onOpenRecents,
-            )
-            OsdCircleButton(
-                icon = aspectIcon,
-                contentDescription = aspectLabel,
-                onClick = onCycleAspect,
-            )
+            if (onOpenProgramme != null) {
+                OsdCircleButton(
+                    icon = Icons.AutoMirrored.Filled.List,
+                    contentDescription = "Программа канала",
+                    onClick = onOpenProgramme,
+                )
+            }
+            if (onToggleFavorite != null) {
+                OsdCircleButton(
+                    icon = if (favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    contentDescription = "Избранное",
+                    onClick = onToggleFavorite,
+                    tint = if (favorite) TvColors.favorite else Color.White,
+                    active = favorite,
+                )
+            }
+            if (onOpenRecents != null) {
+                OsdCircleButton(
+                    icon = Icons.Filled.DateRange,
+                    contentDescription = "Недавние каналы",
+                    onClick = onOpenRecents,
+                )
+            }
+            if (aspectIcon != null && aspectLabel != null && onCycleAspect != null) {
+                OsdCircleButton(
+                    icon = aspectIcon,
+                    contentDescription = aspectLabel,
+                    onClick = onCycleAspect,
+                )
+            }
             Spacer(Modifier.width(11.dp))
             Text(
                 text = clock,

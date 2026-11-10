@@ -339,11 +339,11 @@ private fun ShiftButton(label: String, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     Box(
         modifier = Modifier
+            .tvFocusRing(focused = focused, shape = RoundedCornerShape(TvRadius.item))
             .clip(RoundedCornerShape(TvRadius.item))
             .background(TvColors.rowSelectedStart)
             .clickable(onClick = onClick)
             .onFocusChanged { focused = it.isFocused }
-            .tvFocusRing(focused = focused, shape = RoundedCornerShape(TvRadius.item))
             .focusable()
             .padding(horizontal = 10.dp, vertical = 4.dp),
         contentAlignment = Alignment.Center,

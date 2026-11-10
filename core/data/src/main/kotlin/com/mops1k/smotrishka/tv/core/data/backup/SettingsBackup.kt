@@ -17,6 +17,7 @@ import com.mops1k.smotrishka.tv.core.data.VideoQuality
  * @param player настройки плеера;
  * @param guides гиды XMLTV;
  * @param favorites избранные каналы;
+ * @param vod медиатека: портал и её избранное;
  * @param update настройки обновления приложения.
  */
 data class SettingsBackup(
@@ -26,6 +27,7 @@ data class SettingsBackup(
     val player: Player = Player(),
     val guides: List<Guide> = emptyList(),
     val favorites: List<String> = emptyList(),
+    val vod: Vod? = null,
     val update: Update = Update(),
 ) {
 
@@ -90,6 +92,56 @@ data class SettingsBackup(
     data class Guide(val url: String, val name: String = "")
 
     /**
+     * Медиатека в файле настроек.
+     *
+     * Ключ портала лежит в файле открыто — по тем же причинам, что и код провайдера:
+     * после удаления приложения ключ Android Keystore исчезает, и зашифровать его нечем.
+     * Файл бэкапа считается секретом.
+     *
+     * @param url адрес портала;
+     * @param key ключ портала;
+     * @param favorites избранные карточки.
+     */
+    data class Vod(
+        val url: String? = null,
+        val key: String? = null,
+        val favorites: List<Favorite> = emptyList(),
+    )
+
+    /**
+     * Избранная карточка медиатеки в плоском виде.
+     *
+     * @param titleId идентификатор карточки на портале;
+     * @param title название;
+     * @param year год выпуска;
+     * @param posterUrl большой постер;
+     * @param previewPosterUrl превью для сетки;
+     * @param description описание;
+     * @param kind вид карточки (`STREAM`/`MULTISTREAM`);
+     * @param durationSeconds длительность;
+     * @param isFhd признак Full HD;
+     * @param is4k признак 4K;
+     * @param isHdr признак HDR;
+     * @param ageLimit возрастное ограничение;
+     * @param addedAtMillis когда добавили в избранное.
+     */
+    data class Favorite(
+        val titleId: Int,
+        val title: String,
+        val year: Int? = null,
+        val posterUrl: String? = null,
+        val previewPosterUrl: String? = null,
+        val description: String? = null,
+        val kind: String = "STREAM",
+        val durationSeconds: Long? = null,
+        val isFhd: Boolean = false,
+        val is4k: Boolean = false,
+        val isHdr: Boolean = false,
+        val ageLimit: Int? = null,
+        val addedAtMillis: Long = 0L,
+    )
+
+    /**
      * Настройки обновления приложения.
      *
      * @param includePrereleases предлагать пререлизы;
@@ -101,7 +153,12 @@ data class SettingsBackup(
     )
 
     companion object {
-        /** Текущая версия схемы файла. */
+        /**
+         * Текущая версия схемы файла.
+         *
+         * Секция медиатеки (`vod`) добавлена аддитивно и версию не поднимает: кодек требует
+         * точного совпадения версии, и подъём отверг бы уже сохранённые файлы.
+         */
         const val SCHEMA_VERSION = 1
 
         /** Префикс имени файла настроек. */

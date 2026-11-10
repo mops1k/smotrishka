@@ -202,12 +202,15 @@ object DataModule {
         epgGuideRepository: EpgGuideRepository,
         favoritesStore: FavoritesStore,
         updateSettingsStore: UpdateSettingsStore,
+        // Реализация секции медиатеки приходит из модуля данных медиатеки.
+        vodBackup: com.mops1k.smotrishka.tv.core.data.backup.VodBackupPort,
     ): SettingsBackupService = SettingsBackupService(
         sourceRepository = sourceRepository,
         playerSettingsStore = playerSettingsStore,
         epgGuideRepository = epgGuideRepository,
         favoritesStore = favoritesStore,
         updateSettingsStore = updateSettingsStore,
+        vodBackup = vodBackup,
     )
 
     @Provides

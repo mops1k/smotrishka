@@ -21,8 +21,11 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.mops1k.smotrishka.tv.core.designsystem.component.TvAppBackground
 import com.mops1k.smotrishka.tv.core.designsystem.theme.TvDimens
+import com.mops1k.smotrishka.tv.ui.vod.VodAvailabilityViewModel
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
@@ -39,6 +42,9 @@ val LocalNarrowLayout = staticCompositionLocalOf { false }
 
 /**
  * Каркас приложения: сайдбар, шапка раздела и содержимое.
+ *
+ * Пункт «Медиатека» каркас решает сам — по проверенному подключению портала. Флаг не передаётся
+ * от экрана к экрану: иначе любой новый экран мог бы забыть его передать, и пункт пропадал бы.
  *
  * @param destination текущий раздел;
  * @param onSelect выбор раздела;
@@ -68,6 +74,8 @@ fun AppShell(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val now = rememberClock()
+    val availability: VodAvailabilityViewModel = hiltViewModel()
+    val showMediateka by availability.connected.collectAsStateWithLifecycle()
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val narrow = maxWidth < NARROW_WIDTH
@@ -81,6 +89,7 @@ fun AppShell(
                     current = destination,
                     onSelect = onSelect,
                     narrow = narrow,
+                    showMediateka = showMediateka,
                     focusEnabled = sidebarFocused,
                     menuFocusRequester = menuFocusRequester,
                     rightFocus = sidebarRightFocus,

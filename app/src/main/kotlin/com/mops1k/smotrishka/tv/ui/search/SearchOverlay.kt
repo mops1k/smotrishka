@@ -189,11 +189,11 @@ private fun SearchResults(results: List<SearchHit>, onPick: (SearchHit) -> Unit)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .tvFocusRing(focused = focused, shape = RoundedCornerShape(TvRadius.control))
                     .clip(RoundedCornerShape(TvRadius.control))
                     .background(if (focused) TvColors.rowHover else Color.Transparent)
                     .onFocusChanged { focused = it.isFocused }
                     .clickable { onPick(hit) }
-                    .tvFocusRing(focused = focused, shape = RoundedCornerShape(TvRadius.control))
                     .focusable()
                     .padding(horizontal = 12.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,

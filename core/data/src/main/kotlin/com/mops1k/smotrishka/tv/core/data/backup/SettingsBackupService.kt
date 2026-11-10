@@ -8,7 +8,8 @@ import com.mops1k.smotrishka.tv.core.data.update.UpdateSettingsStore
 import kotlinx.coroutines.flow.first
 
 /**
- * Экспорт и импорт настроек приложения: источник, плеер, гиды, избранное и настройки обновления.
+ * Экспорт и импорт настроек приложения: источник, плеер, гиды, избранное, медиатека и настройки
+ * обновления.
  *
  * Используется в сценарии переустановки (подпись APK не совпала) и для переноса настроек
  * на другое устройство. Любая ошибка возвращается результатом, а не исключением.
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.first
  * @param playerSettingsStore настройки плеера;
  * @param epgGuideRepository гиды XMLTV;
  * @param favoritesStore избранные каналы;
+ * @param vodBackup секция медиатеки: порт, который реализует модуль данных медиатеки;
  * @param updateSettingsStore настройки обновления;
  * @param codec сериализация файла;
  * @param clock источник времени.
@@ -27,6 +29,7 @@ class SettingsBackupService(
     private val epgGuideRepository: EpgGuideRepository,
     private val favoritesStore: FavoritesStore,
     private val updateSettingsStore: UpdateSettingsStore,
+    private val vodBackup: VodBackupPort = VodBackupPort.None,
     private val codec: SettingsBackupCodec = SettingsBackupCodec(),
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
@@ -78,6 +81,7 @@ class SettingsBackupService(
             SettingsBackup.Guide(url = guide.url, name = guide.name)
         },
         favorites = favoritesStore.channels.first().toList(),
+        vod = vodBackup.read(),
         update = updateSettingsStore.settings.first().let { settings ->
             SettingsBackup.Update(
                 includePrereleases = settings.includePrereleases,
@@ -111,6 +115,8 @@ class SettingsBackupService(
         backup.guides.forEach { guide -> epgGuideRepository.add(guide.url, guide.name) }
 
         favoritesStore.setChannels(backup.favorites.toSet())
+
+        backup.vod?.let { vod -> vodBackup.restore(vod) }
 
         updateSettingsStore.setIncludePrereleases(backup.update.includePrereleases)
         updateSettingsStore.setWifiOnly(backup.update.wifiOnly)

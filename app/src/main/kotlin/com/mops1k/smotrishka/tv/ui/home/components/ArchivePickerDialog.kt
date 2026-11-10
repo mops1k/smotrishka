@@ -131,7 +131,6 @@ fun ArchivePickerDialog(
                                     rowShape,
                                 )
                                 .clickable { onPick(moment) }
-                                .focusable()
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                             contentAlignment = Alignment.CenterStart,
                         ) {
