@@ -57,12 +57,14 @@ import java.time.ZoneId
  *
  * @param channels каналы в порядке переключения;
  * @param currentChannelId канал, который играет: на нём фокус при открытии;
+ * @param onClose закрытие панели крестиком в шапке;
  * @param onSelect выбор канала (OK переключает канал и закрывает панель).
  */
 @Composable
 fun ChannelListOverlay(
     channels: List<ChannelRef>,
     currentChannelId: String,
+    onClose: () -> Unit,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -70,6 +72,7 @@ fun ChannelListOverlay(
         rows = channels.map { it.toPanelRow() },
         currentChannelId = currentChannelId,
         title = "Каналы",
+        onClose = onClose,
         onSelect = onSelect,
         modifier = modifier,
     )
@@ -80,12 +83,14 @@ fun ChannelListOverlay(
  *
  * @param recents недавние каналы, свежие первыми;
  * @param currentChannelId канал, который играет: на нём фокус при открытии;
+ * @param onClose закрытие панели крестиком в шапке;
  * @param onSelect выбор канала (OK переключает канал и закрывает панель).
  */
 @Composable
 fun RecentsOverlay(
     recents: List<RecentChannelRef>,
     currentChannelId: String,
+    onClose: () -> Unit,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -93,6 +98,7 @@ fun RecentsOverlay(
         rows = recents.map { it.toPanelRow() },
         currentChannelId = currentChannelId,
         title = "Недавние каналы",
+        onClose = onClose,
         onSelect = onSelect,
         modifier = modifier,
     )
@@ -147,6 +153,7 @@ private fun RecentChannelRef.toPanelRow() = PanelRow(
  * @param rows строки списка;
  * @param currentChannelId играющий канал: на нём фокус при открытии;
  * @param title заголовок панели;
+ * @param onClose закрытие панели крестиком в шапке;
  * @param onSelect выбор строки;
  * @param modifier размеры панели.
  */
@@ -155,6 +162,7 @@ private fun ChannelOverlay(
     rows: List<PanelRow>,
     currentChannelId: String,
     title: String,
+    onClose: () -> Unit,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -179,7 +187,7 @@ private fun ChannelOverlay(
         runCatching { currentFocus.requestFocus() }
     }
 
-    OverlaySurface(title = title, modifier = modifier) {
+    OverlaySurface(title = title, onClose = onClose, modifier = modifier) {
         LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
             items(items = rows, key = { it.id }) { row ->
                 ChannelOverlayRow(

@@ -865,8 +865,15 @@ private fun PlayerContent(
 
     // Фокус живёт на корне, пока не открыт OSD или панели: иначе пульт перестаёт
     // доходить до обработчика клавиш (например, после закрытия списка каналов).
-    LaunchedEffect(controlsState.osdVisible, channelsVisible, recentsVisible) {
-        if (!controlsState.osdVisible && !channelsVisible && !recentsVisible) {
+    // «Телепрограмма» в списке ключей не забыта: после закрытия её крестиком фокус тоже
+    // должен вернуться на корень, иначе пульт остаётся без фокуса.
+    LaunchedEffect(controlsState.osdVisible, channelsVisible, recentsVisible, programmeVisible) {
+        if (
+            !controlsState.osdVisible &&
+            !channelsVisible &&
+            !recentsVisible &&
+            !programmeVisible
+        ) {
             withFrameNanos { }
             runCatching { rootFocus.requestFocus() }
         }
@@ -1172,7 +1179,7 @@ private fun PlayerContent(
                 withFrameNanos { }
                 runCatching { currentProgramme.requestFocus() }
             }
-            OverlaySurface(title = "Телепрограмма") {
+            OverlaySurface(title = "Телепрограмма", onClose = { programmeVisible = false }) {
                 if (schedule.isEmpty()) {
                     Text(
                         text = "Программы нет",
@@ -1280,6 +1287,7 @@ private fun PlayerContent(
             RecentsOverlay(
                 recents = recents,
                 currentChannelId = channel.channelId.value,
+                onClose = { recentsVisible = false },
                 onSelect = { id ->
                     recentsVisible = false
                     onOpenRecent(id)
@@ -1293,6 +1301,7 @@ private fun PlayerContent(
             ChannelListOverlay(
                 channels = channels,
                 currentChannelId = channel.channelId.value,
+                onClose = { channelsVisible = false },
                 onSelect = { id ->
                     channelsVisible = false
                     onSwitchChannel(id)
