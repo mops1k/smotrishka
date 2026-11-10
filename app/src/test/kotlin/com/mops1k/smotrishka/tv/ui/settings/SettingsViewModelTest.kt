@@ -38,6 +38,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -87,6 +88,7 @@ class SettingsViewModelTest {
 
     @Before
     fun setUp() {
+        settleMain()
         Dispatchers.setMain(UnconfinedTestDispatcher())
         database = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext(),
@@ -131,10 +133,16 @@ class SettingsViewModelTest {
     @After
     fun tearDown() {
         viewModels.forEach { it.viewModelScope.cancel() }
+        settleMain()
         Dispatchers.resetMain()
         server.shutdown()
         scope.cancel()
         database.close()
+    }
+
+    /** Даёт продолжениям прошлого теста завершиться перед подменой главного диспетчера. */
+    private fun settleMain() {
+        runBlocking { withContext(Dispatchers.Default) { delay(SETTLE_MS) } }
     }
 
     private fun viewModel() = SettingsViewModel(
@@ -323,6 +331,9 @@ class SettingsViewModelTest {
     }
 
     private companion object {
+
+        /** Пауза, чтобы продолжения корутин завершились перед подменой Main. */
+        const val SETTLE_MS = 50L
         /** Сколько реального времени ждём очистки ленты на диспетчере DataStore. */
         const val AWAIT_MS = 2_000L
 

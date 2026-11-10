@@ -31,11 +31,13 @@ import com.mops1k.smotrishka.tv.core.playlist.M3uParseResult
 import com.mops1k.smotrishka.tv.core.playlist.M3uParser
 import com.mops1k.smotrishka.tv.core.playlist.XmltvParser
 import com.mops1k.smotrishka.tv.epg.EpgUpdater
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -81,6 +83,7 @@ class OnboardingViewModelTest {
 
     @Before
     fun setUp() {
+        settleMain()
         Dispatchers.setMain(UnconfinedTestDispatcher())
         server = MockWebServer()
         server.start()
@@ -125,11 +128,20 @@ class OnboardingViewModelTest {
     @After
     fun tearDown() {
         viewModels.forEach { it.viewModelScope.cancel() }
+        settleMain()
         Dispatchers.resetMain()
         scope.cancel()
         server.shutdown()
         database.close()
     }
+
+    /** Даёт продолжениям прошлого теста завершиться перед подменой главного диспетчера. */
+    private fun settleMain() {
+        runBlocking { withContext(Dispatchers.Default) { delay(settleMs) } }
+    }
+
+    /** Пауза, чтобы продолжения корутин завершились перед подменой Main. */
+    private val settleMs = 50L
 
     private fun viewModel() = OnboardingViewModel(
         sourceRepository,

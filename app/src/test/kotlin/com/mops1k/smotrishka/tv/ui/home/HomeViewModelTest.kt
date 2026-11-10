@@ -31,6 +31,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -81,6 +82,9 @@ class HomeViewModelTest {
 
     @Before
     fun setUp() {
+        // Продолжения прошлого теста могли ещё не завершиться: подмена Main на этом фоне
+        // бросает «Dispatchers.Main is used concurrently with setting it» (флейк CI 10.11.2026).
+        settleDispatchers()
         mainDispatcher = UnconfinedTestDispatcher()
         Dispatchers.setMain(mainDispatcher)
         database = Room.inMemoryDatabaseBuilder(
@@ -106,9 +110,21 @@ class HomeViewModelTest {
         // иначе их продолжения попадают в следующий тест и ломают его планировщик.
         mainDispatcher.scheduler.advanceUntilIdle()
         viewModels.forEach { it.viewModelScope.cancel() }
+        settleDispatchers()
         Dispatchers.resetMain()
         settingsScope.cancel()
         database.close()
+    }
+
+
+    /**
+     * Даёт фоновым продолжениям завершиться перед подменой или сбросом главного диспетчера.
+     *
+     * Отмена скоупа ViewModel не дожидается последнего шага корутин, которые уже ушли на
+     * реальные диспетчеры: без паузы следующий тест натыкается на одновременное использование Main.
+     */
+    private fun settleDispatchers() {
+        runBlocking { withContext(Dispatchers.Default) { delay(SETTLE_MS) } }
     }
 
     private val searchRepository by lazy {
@@ -802,6 +818,9 @@ class HomeViewModelTest {
     private companion object {
         /** Сколько реального времени ждём ввода-вывода между шагами. */
         const val AWAIT_REAL_MS = 25L
+
+        /** Пауза, чтобы продолжения корутин завершились перед подменой Main. */
+        const val SETTLE_MS = 50L
 
         /**
          * Предел ожидания по реальному времени.

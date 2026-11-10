@@ -30,6 +30,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.withContext
@@ -75,6 +77,14 @@ class PlayerViewModelTest {
     @get:Rule
     val tempFolder = TemporaryFolder()
 
+    /** Даёт продолжениям прошлого теста завершиться перед подменой главного диспетчера. */
+    private fun settleMain() {
+        runBlocking { withContext(Dispatchers.Default) { delay(settleMs) } }
+    }
+
+    /** Пауза, чтобы продолжения корутин завершились перед подменой Main. */
+    private val settleMs = 50L
+
     private val now: Instant = Instant.parse("2026-11-02T20:00:00Z")
 
     /** Созданные ViewModel: их скоупы гасим до resetMain, иначе корутины переживут тест. */
@@ -82,6 +92,7 @@ class PlayerViewModelTest {
 
     @Before
     fun setUp() {
+        settleMain()
         Dispatchers.setMain(UnconfinedTestDispatcher())
         database = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext(),
@@ -99,6 +110,7 @@ class PlayerViewModelTest {
     @After
     fun tearDown() {
         viewModels.forEach { it.viewModelScope.cancel() }
+        settleMain()
         Dispatchers.resetMain()
         settingsScope.cancel()
         database.close()

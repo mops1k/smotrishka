@@ -20,11 +20,14 @@ import com.mops1k.smotrishka.tv.core.model.EpgChannel
 import com.mops1k.smotrishka.tv.core.model.Playlist
 import com.mops1k.smotrishka.tv.core.model.Programme
 import com.mops1k.smotrishka.tv.core.playlist.EpgMatcher
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -55,6 +58,14 @@ class ProgrammeViewModelTest {
     @get:org.junit.Rule
     val tempFolder = org.junit.rules.TemporaryFolder()
 
+    /** Даёт продолжениям прошлого теста завершиться перед подменой главного диспетчера. */
+    private fun settleMain() {
+        runBlocking { withContext(Dispatchers.Default) { delay(settleMs) } }
+    }
+
+    /** Пауза, чтобы продолжения корутин завершились перед подменой Main. */
+    private val settleMs = 50L
+
     private val now: Instant = Instant.parse("2026-11-03T20:00:00Z")
 
     /** Созданные ViewModel: их скоупы гасим до resetMain, иначе корутины переживут тест. */
@@ -62,6 +73,7 @@ class ProgrammeViewModelTest {
 
     @Before
     fun setUp() {
+        settleMain()
         Dispatchers.setMain(UnconfinedTestDispatcher())
         database = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext(),
@@ -78,6 +90,7 @@ class ProgrammeViewModelTest {
     @After
     fun tearDown() {
         viewModels.forEach { it.viewModelScope.cancel() }
+        settleMain()
         Dispatchers.resetMain()
         settingsScope.cancel()
         database.close()
